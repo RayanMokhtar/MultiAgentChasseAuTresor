@@ -133,6 +133,16 @@ public class Zone {
         }
         return obstacles;
     }
+    
+    public List<Fusil> getFusils() {
+        List<Fusil> fusils = new ArrayList<>();
+        for (ObjetEnvironnement obj : objets) {
+            if (obj instanceof Fusil && obj.isActif()) {
+                fusils.add((Fusil) obj);
+            }
+        }
+        return fusils;
+    }
 
     // Getters
     public int getId() { return id; }

@@ -9,9 +9,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Agent Communicant - Agent stationnaire qui émet des signaux
- * Fournit des informations aux agents qui entrent dans sa zone
- * Un agent communicant par zone (sauf QG)
+ * Agent Communicant (Sentinelle) - Agent stationnaire qui observe et partage des informations
+ * 
+ * RÈGLES DU TP:
+ * - Stationnaire (ne bouge pas)
+ * - Observe la zone assignée et collecte des informations
+ * - Communique les informations aux agents qui entrent dans sa zone
+ * - NE PEUT PAS secourir ou téléporter les agents
+ * - Les agents cognitifs utilisent ses informations dans leurs beliefs
  */
 public class AgentCommunicant extends Agent {
     
@@ -22,7 +27,7 @@ public class AgentCommunicant extends Agent {
     private volatile long derniereMiseAJour;
     
     private static final Color COULEUR = new Color(148, 0, 211); // Violet
-    private static final long INTERVALLE_MAJ = 500; // ms
+    private static final long INTERVALLE_MAJ = 1000; // 1 seconde (comme dans les règles)
 
     /**
      * Message transmis entre agents communicants
@@ -67,7 +72,7 @@ public class AgentCommunicant extends Agent {
     }
 
     public AgentCommunicant(String nom, Carte carte, Zone zoneAssignee) {
-        super(nom, carte, 60, 5, 200); // Peu de PV/force mais beaucoup d'énergie
+        super(nom, carte, 60, 5); // Peu de PV/force
         this.zoneAssignee = zoneAssignee;
         this.position = zoneAssignee.getCentre();
         this.zoneActuelle = zoneAssignee;
@@ -85,7 +90,7 @@ public class AgentCommunicant extends Agent {
     public void agir() {
         if (!enVie.get()) return;
 
-        // 1. Mettre à jour les informations régulièrement
+        // 1. Mettre à jour les informations régulièrement (toutes les 1 seconde)
         long maintenant = System.currentTimeMillis();
         if (maintenant - derniereMiseAJour > INTERVALLE_MAJ) {
             mettreAJourInformations();
@@ -101,7 +106,7 @@ public class AgentCommunicant extends Agent {
         // 4. Émettre des alertes si nécessaire
         verifierEtEmettre();
 
-        // 5. Rester dans la zone (ne pas bouger)
+        // 5. Rester dans la zone (ne pas bouger - stationnaire)
         if (!zoneAssignee.contientPosition(position)) {
             position = zoneAssignee.getCentre();
         }
@@ -120,20 +125,7 @@ public class AgentCommunicant extends Agent {
         informationsZone.put("obstacles", obstacles.size());
         informationsZone.put("niveau_danger", calculerNiveauDanger(animaux));
         informationsZone.put("exploree", zoneAssignee.isExploree());
-        
-        // Positions des trésors
-        List<Position> positionsTresors = new ArrayList<>();
-        for (Tresor t : tresors) {
-            positionsTresors.add(t.getPosition().copy());
-        }
-        informationsZone.put("positions_tresors", positionsTresors);
-        
-        // Positions et types des animaux
-        List<String> infoAnimaux = new ArrayList<>();
-        for (Animal a : animaux) {
-            infoAnimaux.add(a.getTypeAnimal().name() + " à " + a.getPosition());
-        }
-        informationsZone.put("info_animaux", infoAnimaux);
+        // Ne plus partager les positions exactes pour éviter la clairvoyance
     }
 
     private int calculerNiveauDanger(List<Animal> animaux) {
@@ -174,14 +166,7 @@ public class AgentCommunicant extends Agent {
         
         System.out.println(info);
         
-        // Si agent cognitif, donner plus de détails
-        if (agent instanceof AgentCognitif && tresors > 0) {
-            @SuppressWarnings("unchecked")
-            List<Position> posTresors = (List<Position>) informationsZone.get("positions_tresors");
-            if (posTresors != null && !posTresors.isEmpty()) {
-                System.out.println("   📍 Position trésor: " + posTresors.get(0));
-            }
-        }
+        // Pas de positions exactes pour éviter le guidage parfait
     }
 
     private void traiterMessages() {
@@ -246,7 +231,7 @@ public class AgentCommunicant extends Agent {
 
     @Override
     public synchronized boolean deplacer(Position nouvellePosition) {
-        // L'agent communicant ne bouge pas
+        // L'agent communicant ne bouge pas (stationnaire)
         return false;
     }
 

@@ -11,14 +11,16 @@ import sma.environnement.*;
  */
 public class Simulation {
     
-    // Configuration par défaut
-    public static final int NB_AGENTS_COGNITIFS = 3;
-    public static final int NB_AGENTS_REACTIFS = 4;
+    // Configuration par défaut - équipe réduite pour 9 zones
+    public static final int NB_AGENTS_COGNITIFS = 2;
+    public static final int NB_AGENTS_REACTIFS = 3;
     
     private final Carte carte;
     private final List<Agent> agents;
     private final List<AgentCommunicant> agentsCommunicants;
     private final Statistiques stats;
+    private final ConcurrentHashMap<sma.objets.Animal, Agent> leurres;
+    private final RessourcesPartagees ressourcesPartagees; // Ressources partagées entre threads
     
     private ExecutorService executorAgents;
     private ScheduledExecutorService schedulerStats;
@@ -45,6 +47,8 @@ public class Simulation {
         this.agents = new CopyOnWriteArrayList<>();
         this.agentsCommunicants = new CopyOnWriteArrayList<>();
         this.stats = new Statistiques();
+        this.leurres = new ConcurrentHashMap<>();
+        this.ressourcesPartagees = new RessourcesPartagees(); // Initialiser les ressources partagées
         this.listeners = new CopyOnWriteArrayList<>();
         this.enCours = false;
         this.pause = false;
@@ -71,14 +75,14 @@ public class Simulation {
             agents.add(agent);
         }
         
-        // Créer les agents communicants (1 pour chaque 2 zones, sauf QG)
+        // Créer les agents communicants (moitié du nombre de zones, sauf QG = 4 sentinelles)
         int nbZones = carte.getNombreZones();
-        int nbCommunicants = nbZones / 2;
+        int nbCommunicants = (nbZones - 1) / 2; // Moitié des zones non-QG
         int compteur = 0;
         
         for (Zone zone : carte.getZones()) {
             if (!zone.estQG() && compteur < nbCommunicants) {
-                String nom = "Radio-" + zone.getId();
+                String nom = "Sentinelle-" + (compteur + 1);
                 AgentCommunicant agent = new AgentCommunicant(nom, carte, zone);
                 agent.setSimulation(this);
                 agents.add(agent);
@@ -108,12 +112,13 @@ public class Simulation {
             executorAgents.submit(agent);
         }
         
-        // Scheduler pour les mises à jour statistiques
+        // Scheduler pour les mises à jour statistiques et le comportement des animaux
         schedulerStats = Executors.newSingleThreadScheduledExecutor();
         schedulerStats.scheduleAtFixedRate(() -> {
             if (!pause) {
                 stats.incrementerIterations();
                 mettreAJourZonesExplorees();
+                faireAgirAnimaux(); // Les animaux chassent les agents
                 notifierListeners();
                 
                 // Vérifier condition de fin
@@ -177,10 +182,84 @@ public class Simulation {
         }
         stats.setZonesExplorees(count);
     }
+    
+    /**
+     * Fait agir tous les animaux sur la carte
+     * RÈGLES:
+     * - Marche au hasard dans leur zone
+     * - Si détecte un agent (range 5), le chasse
+     * - Si rencontre un trésor, reste autour
+     * - S'il y a 2 agents, chasse le plus proche
+     * - Ne peut pas sortir de sa zone assignée
+     */
+    private void faireAgirAnimaux() {
+        for (Zone zone : carte.getZones()) {
+            if (zone.estQG()) continue; // Pas d'animaux au QG
+            
+            for (sma.objets.Animal animal : zone.getAnimaux()) {
+                if (!animal.isActif()) continue;
+                
+                // Assigner la zone si pas fait
+                if (animal.getZoneAssignee() == null) {
+                    animal.setZoneAssignee(zone);
+                }
+                
+                // Priorité : poursuivre un agent détecté
+                Agent cibleAgent = null;
+                double distMinAgent = Double.MAX_VALUE;
+                for (Agent agent : zone.getAgentsPresents()) {
+                    if (agent instanceof AgentCommunicant) continue; // N'attaque pas les sentinelles
+                    if (!agent.isEnVie() || agent.isBlesse()) continue;
+                    double dist = animal.getPosition().distanceTo(agent.getPosition());
+                    if (animal.detecteAgent(agent.getPosition()) && dist < distMinAgent) {
+                        distMinAgent = dist;
+                        cibleAgent = agent;
+                    }
+                }
+
+                if (cibleAgent != null) {
+                    // Chasser l'agent détecté
+                    animal.setCible(cibleAgent.getPosition());
+                } else {
+                    // Pas d'agent détecté, déplacement aléatoire
+                    animal.setCible(null);
+                }
+                
+                // Déplacer l'animal
+                animal.seDeplacer();
+                
+                // Attaquer si à portée
+                if (cibleAgent != null && animal.peutAttaquer(cibleAgent.getPosition())) {
+                    int degats = animal.attaquer();
+                    cibleAgent.recevoirDegats(degats);
+                    stats.enregistrerCombat();
+                    System.out.println("🐾 " + animal.getTypeAnimal().name() + 
+                                     " attaque " + cibleAgent.getNom() + " (-" + degats + " PV)");
+                }
+            }
+        }
+    }
 
     private boolean verifierFinSimulation() {
         // Fin si tous les trésors sont collectés
         return carte.getTousTresorsNonCollectes().isEmpty();
+    }
+
+    // Coordination: un agent peut se déclarer "leurre" d'un animal gardant un trésor
+    public boolean assignerLeurre(sma.objets.Animal animal, Agent agent) {
+        if (animal == null || agent == null) return false;
+        Agent deja = leurres.putIfAbsent(animal, agent);
+        return deja == null || deja == agent;
+    }
+
+    public Agent getLeurre(sma.objets.Animal animal) {
+        return animal == null ? null : leurres.get(animal);
+    }
+
+    public void libererLeurre(sma.objets.Animal animal) {
+        if (animal != null) {
+            leurres.remove(animal);
+        }
     }
 
     private void notifierListeners() {
@@ -197,11 +276,33 @@ public class Simulation {
         listeners.remove(listener);
     }
 
+    /**
+     * Demande à un agent réactif disponible de se rapprocher d'un point (soutien simple)
+     */
+    public boolean demanderSupportReactif(sma.objets.Position cible) {
+        AgentReactif choix = null;
+        double distMin = Double.MAX_VALUE;
+        for (Agent agent : agents) {
+            if (agent instanceof AgentReactif ar && ar.isEnVie() && !ar.isBlesse()) {
+                double d = ar.getPosition().distanceTo(cible);
+                if (d < distMin) {
+                    distMin = d;
+                    choix = ar;
+                }
+            }
+        }
+        if (choix != null) {
+            return choix.assignerSupport(cible);
+        }
+        return false;
+    }
+
     // Getters
     public Carte getCarte() { return carte; }
     public List<Agent> getAgents() { return new ArrayList<>(agents); }
     public List<AgentCommunicant> getAgentsCommunicants() { return new ArrayList<>(agentsCommunicants); }
     public Statistiques getStats() { return stats; }
+    public RessourcesPartagees getRessourcesPartagees() { return ressourcesPartagees; }
     public boolean isEnCours() { return enCours; }
     public boolean isPause() { return pause; }
 }

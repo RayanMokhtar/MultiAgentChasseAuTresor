@@ -19,9 +19,7 @@ public abstract class Agent implements Runnable {
     protected volatile Position position;
     protected volatile int pointsDeVie;
     protected final int pointsDeVieMax;
-    protected final int force;
-    protected volatile int energie;
-    protected final int energieMax;
+    protected int force;
     protected final AtomicBoolean enVie;
     protected final AtomicBoolean actif;
     
@@ -30,30 +28,47 @@ public abstract class Agent implements Runnable {
     protected volatile Zone zoneActuelle;
     protected Simulation simulation;
     
+    // FUSIL - Item spécial
+    protected volatile Fusil fusil;
+    protected volatile boolean aUnFusil;
+    
+    // Système de blessure
+    protected volatile boolean blesse;
+    protected volatile Position positionBlessure;
+    protected volatile long tempsBlessure;
+    public static final long TEMPS_ATTENTE_BLESSURE = 10000; // 10 secondes
+    
     // Statistiques thread-safe
     protected final AtomicInteger nombreCombats = new AtomicInteger(0);
     protected final AtomicInteger nombreVictoires = new AtomicInteger(0);
     protected final AtomicInteger nombreMorts = new AtomicInteger(0);
     protected final AtomicInteger distanceParcourue = new AtomicInteger(0);
-    protected final AtomicInteger scoreTotal = new AtomicInteger(0);
+    protected final AtomicInteger animauxTues = new AtomicInteger(0);
     
     // Contrôle du thread
     protected volatile boolean running = false;
     protected final Object lockMouvement = new Object();
     protected static final int DELAI_ACTION = 100; // ms entre chaque action
 
-    public Agent(String nom, Carte carte, int pointsDeVieMax, int force, int energieMax) {
+    public Agent(String nom, Carte carte, int pointsDeVieMax, int force) {
         this.id = compteurId.incrementAndGet();
         this.nom = nom;
         this.carte = carte;
         this.pointsDeVieMax = pointsDeVieMax;
         this.pointsDeVie = pointsDeVieMax;
         this.force = force;
-        this.energieMax = energieMax;
-        this.energie = energieMax;
         this.enVie = new AtomicBoolean(true);
         this.actif = new AtomicBoolean(true);
         this.tresorsCollectes = Collections.synchronizedList(new ArrayList<>());
+        
+        // Fusil
+        this.fusil = null;
+        this.aUnFusil = false;
+        
+        // Système de blessure
+        this.blesse = false;
+        this.positionBlessure = null;
+        this.tempsBlessure = 0;
         
         // Position initiale au QG
         this.position = carte.getQG().getCentre().copy();
@@ -72,7 +87,10 @@ public abstract class Agent implements Runnable {
         
         while (running && actif.get()) {
             try {
-                if (!enVie.get()) {
+                if (blesse) {
+                    // Agent blessé - attend le secours
+                    gererBlessure();
+                } else if (!enVie.get()) {
                     // Attendre avant réapparition
                     Thread.sleep(2000);
                     reapparaitre();
@@ -86,6 +104,54 @@ public abstract class Agent implements Runnable {
             }
         }
         System.out.println("🛑 " + nom + " arrête son exploration.");
+    }
+    
+    /**
+     * Gère le système de blessure :
+     * - Attend 10 secondes
+     * - Si un agent passe dessus, respawn sur place
+     * - Sinon respawn au QG
+     */
+    protected void gererBlessure() {
+        long tempsEcoule = System.currentTimeMillis() - tempsBlessure;
+        
+        if (tempsEcoule >= TEMPS_ATTENTE_BLESSURE) {
+            // Temps écoulé, respawn au QG
+            System.out.println("⏰ " + nom + " n'a pas été secouru, retour au QG!");
+            blesse = false;
+            reapparaitre();
+        }
+        // Sinon, continue d'attendre (un autre agent peut le secourir)
+    }
+    
+    /**
+     * Vérifie si un agent blessé est à proximité pour le secourir
+     */
+    public boolean peutSecourir(Agent agentBlesse) {
+        if (!enVie.get() || blesse) return false;
+        return position.distanceTo(agentBlesse.getPosition()) <= 20;
+    }
+    
+    /**
+     * Secourt un agent blessé - le fait respawn sur place
+     */
+    public void secourir(Agent agentBlesse) {
+        if (agentBlesse.blesse && peutSecourir(agentBlesse)) {
+            agentBlesse.respawnSurPlace();
+            System.out.println("🚑 " + nom + " a secouru " + agentBlesse.getNom() + "!");
+        }
+    }
+    
+    /**
+     * Respawn sur place (secouru par un autre agent)
+     */
+    public void respawnSurPlace() {
+        synchronized (lockMouvement) {
+            this.blesse = false;
+            this.pointsDeVie = pointsDeVieMax;
+            this.enVie.set(true);
+            System.out.println("💚 " + nom + " a été secouru sur place à " + position + " et reprend l'exploration!");
+        }
     }
 
     /**
@@ -107,27 +173,38 @@ public abstract class Agent implements Runnable {
      * Déplace l'agent vers une nouvelle position
      */
     public synchronized boolean deplacer(Position nouvellePosition) {
-        if (!enVie.get() || energie <= 0) return false;
+        if (!enVie.get()) return false;
         
         synchronized (lockMouvement) {
-            if (carte.positionAccessible(nouvellePosition)) {
+            // Clamper la position aux bords de la carte
+            int x = Math.max(5, Math.min(nouvellePosition.getX(), carte.getLargeur() - 5));
+            int y = Math.max(5, Math.min(nouvellePosition.getY(), carte.getHauteur() - 5));
+            Position positionClampee = new Position(x, y);
+            
+            if (carte.positionAccessible(positionClampee)) {
                 // Mise à jour de la zone
                 Zone ancienneZone = zoneActuelle;
-                Zone nouvelleZone = carte.getZoneAt(nouvellePosition);
+                Zone nouvelleZone = carte.getZoneAt(positionClampee);
+                
+                // Protection contre les zones null
+                if (nouvelleZone == null) {
+                    return false;
+                }
                 
                 if (ancienneZone != nouvelleZone) {
-                    ancienneZone.retirerAgent(this);
+                    if (ancienneZone != null) {
+                        ancienneZone.retirerAgent(this);
+                    }
                     nouvelleZone.ajouterAgent(this);
                     zoneActuelle = nouvelleZone;
                 }
                 
                 // Calcul distance
-                int dist = (int) position.distanceTo(nouvellePosition);
+                int dist = (int) position.distanceTo(positionClampee);
                 distanceParcourue.addAndGet(dist);
                 
-                // Déplacement
-                position = nouvellePosition;
-                energie--;
+                // Déplacement - utiliser une copie pour éviter les problèmes de référence
+                this.position = new Position(positionClampee.getX(), positionClampee.getY());
                 
                 return true;
             }
@@ -155,7 +232,7 @@ public abstract class Agent implements Runnable {
     }
 
     /**
-     * Collecte un trésor (thread-safe)
+     * Collecte un trésor (thread-safe, non-bloquant)
      */
     public boolean collecterTresor(Tresor tresor) {
         if (!enVie.get() || tresor == null) return false;
@@ -163,15 +240,50 @@ public abstract class Agent implements Runnable {
         synchronized (tresor) {
             if (tresor.collecter()) {
                 tresorsCollectes.add(tresor);
-                scoreTotal.addAndGet(tresor.getValeur());
-                
                 if (simulation != null) {
-                    simulation.getStats().enregistrerTresorCollecte(tresor.getValeur());
+                    simulation.getStats().enregistrerTresorCollecte();
                 }
                 
-                System.out.println("💰 " + nom + " a collecté un trésor de valeur " + tresor.getValeur() + "!");
+                System.out.println("💰 " + nom + " a collecté un trésor !");
                 return true;
             }
+        }
+        return false;
+    }
+    
+    /**
+     * Ramasse un fusil
+     */
+    public boolean ramasserFusil(Fusil f) {
+        if (!enVie.get() || f == null || aUnFusil) return false;
+        
+        synchronized (f) {
+            if (f.ramasser()) {
+                this.fusil = f;
+                this.aUnFusil = true;
+                System.out.println("🔫 " + nom + " a ramassé un fusil!");
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Utilise le fusil pour tuer un animal (agents réactifs seulement)
+     */
+    public boolean utiliserFusil(Animal animal) {
+        if (!aUnFusil || fusil == null || !fusil.aDesMunitions()) return false;
+        
+        if (fusil.tirer()) {
+            animal.tuer();
+            animauxTues.incrementAndGet();
+            System.out.println("🎯 " + nom + " a tué un " + animal.getTypeAnimal().name() + " avec le fusil!");
+            
+            // Vérifier si le fusil est vide
+            if (!fusil.aDesMunitions()) {
+                System.out.println("🔫 Le fusil de " + nom + " est maintenant vide!");
+            }
+            return true;
         }
         return false;
     }
@@ -218,15 +330,28 @@ public abstract class Agent implements Runnable {
     }
 
     /**
-     * Gère la mort de l'agent
+     * Gère la mort de l'agent - devient blessé au lieu de mourir directement
      */
     public void mourir() {
+        // L'agent devient blessé, pas mort directement
+        blesse = true;
+        positionBlessure = position.copy();
+        tempsBlessure = System.currentTimeMillis();
         enVie.set(false);
         nombreMorts.incrementAndGet();
         if (simulation != null) {
-            simulation.getStats().enregistrerMort();
+            simulation.getStats().enregistrerBlessure();
         }
-        System.out.println("💀 " + nom + " a été vaincu!");
+        // Hook pour libérer les ressources partagées (surchargé dans AgentCognitif)
+        surMourir();
+        System.out.println("🤕 " + nom + " est blessé à " + position + "! Attend du secours pendant 10s...");
+    }
+    
+    /**
+     * Hook appelé lors de la mort - à surcharger dans les sous-classes
+     */
+    protected void surMourir() {
+        // Par défaut ne fait rien
     }
 
     /**
@@ -243,7 +368,6 @@ public abstract class Agent implements Runnable {
             this.zoneActuelle = carte.getQG();
             carte.getQG().ajouterAgent(this);
             this.pointsDeVie = pointsDeVieMax;
-            this.energie = energieMax;
             this.enVie.set(true);
             
             System.out.println("🔄 " + nom + " réapparaît au QG!");
@@ -273,7 +397,6 @@ public abstract class Agent implements Runnable {
      */
     public void reposer() {
         if (zoneActuelle != null && zoneActuelle.estQG()) {
-            this.energie = Math.min(energie + 20, energieMax);
             this.pointsDeVie = Math.min(pointsDeVie + 30, pointsDeVieMax);
         }
     }
@@ -313,10 +436,11 @@ public abstract class Agent implements Runnable {
     public synchronized int getPointsDeVie() { return pointsDeVie; }
     public int getPointsDeVieMax() { return pointsDeVieMax; }
     public int getForce() { return force; }
-    public synchronized int getEnergie() { return energie; }
-    public int getEnergieMax() { return energieMax; }
     public boolean isEnVie() { return enVie.get(); }
     public boolean isActif() { return actif.get(); }
+    public boolean isBlesse() { return blesse; }
+    public boolean aUnFusil() { return aUnFusil; }
+    public Fusil getFusil() { return fusil; }
     public List<Tresor> getTresorsCollectes() { return new ArrayList<>(tresorsCollectes); }
     public Zone getZoneActuelle() { return zoneActuelle; }
     public Carte getCarte() { return carte; }
@@ -326,11 +450,10 @@ public abstract class Agent implements Runnable {
     public int getNombreVictoires() { return nombreVictoires.get(); }
     public int getNombreMorts() { return nombreMorts.get(); }
     public int getDistanceParcourue() { return distanceParcourue.get(); }
-    public int getScoreTotal() { return scoreTotal.get(); }
+    public int getAnimauxTues() { return animauxTues.get(); }
 
     @Override
     public String toString() {
-        return getTypeAgent() + " " + nom + " [PV: " + pointsDeVie + "/" + pointsDeVieMax + 
-               ", ⚡: " + energie + "/" + energieMax + "] à " + position;
+        return getTypeAgent() + " " + nom + " [PV: " + pointsDeVie + "/" + pointsDeVieMax + "] à " + position;
     }
 }

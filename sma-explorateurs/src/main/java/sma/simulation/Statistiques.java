@@ -12,9 +12,12 @@ public class Statistiques {
     private final AtomicInteger totalIterations = new AtomicInteger(0);
     private final AtomicInteger totalCombats = new AtomicInteger(0);
     private final AtomicInteger totalMorts = new AtomicInteger(0);
+    private final AtomicInteger totalBlessures = new AtomicInteger(0);
+    private final AtomicInteger totalSecours = new AtomicInteger(0);
     private final AtomicInteger totalTresorsCollectes = new AtomicInteger(0);
-    private final AtomicInteger scoreTotal = new AtomicInteger(0);
     private final AtomicInteger zonesExplorees = new AtomicInteger(0);
+    private final AtomicInteger animauxTues = new AtomicInteger(0);
+    private final AtomicInteger teleportationsUtilisees = new AtomicInteger(0);
     private final AtomicLong tempsDebut = new AtomicLong(0);
     private final AtomicLong tempsFin = new AtomicLong(0);
     
@@ -41,10 +44,25 @@ public class Statistiques {
     public void enregistrerMort() {
         totalMorts.incrementAndGet();
     }
+    
+    public void enregistrerBlessure() {
+        totalBlessures.incrementAndGet();
+    }
+    
+    public void enregistrerSecours() {
+        totalSecours.incrementAndGet();
+    }
+    
+    public void enregistrerAnimalTue() {
+        animauxTues.incrementAndGet();
+    }
+    
+    public void enregistrerTeleportation() {
+        teleportationsUtilisees.incrementAndGet();
+    }
 
-    public void enregistrerTresorCollecte(int valeur) {
+    public void enregistrerTresorCollecte() {
         totalTresorsCollectes.incrementAndGet();
-        scoreTotal.addAndGet(valeur);
     }
 
     public void setZonesExplorees(int nombre) {
@@ -55,9 +73,12 @@ public class Statistiques {
     public int getTotalIterations() { return totalIterations.get(); }
     public int getTotalCombats() { return totalCombats.get(); }
     public int getTotalMorts() { return totalMorts.get(); }
+    public int getTotalBlessures() { return totalBlessures.get(); }
+    public int getTotalSecours() { return totalSecours.get(); }
     public int getTotalTresorsCollectes() { return totalTresorsCollectes.get(); }
-    public int getScoreTotal() { return scoreTotal.get(); }
     public int getZonesExplorees() { return zonesExplorees.get(); }
+    public int getAnimauxTues() { return animauxTues.get(); }
+    public int getTeleportationsUtilisees() { return teleportationsUtilisees.get(); }
     
     public long getDureeSimulation() {
         if (tempsDebut.get() == 0) return 0;
@@ -77,9 +98,12 @@ public class Statistiques {
         totalIterations.set(0);
         totalCombats.set(0);
         totalMorts.set(0);
+        totalBlessures.set(0);
+        totalSecours.set(0);
         totalTresorsCollectes.set(0);
-        scoreTotal.set(0);
         zonesExplorees.set(0);
+        animauxTues.set(0);
+        teleportationsUtilisees.set(0);
         tempsDebut.set(0);
         tempsFin.set(0);
         simulationTerminee = false;
@@ -96,7 +120,6 @@ public class Statistiques {
         sb.append(String.format("║ ⚔️  Combats: %-23d ║\n", totalCombats.get()));
         sb.append(String.format("║ 💀 Morts: %-26d ║\n", totalMorts.get()));
         sb.append(String.format("║ 💰 Trésors: %-24d ║\n", totalTresorsCollectes.get()));
-        sb.append(String.format("║ 🏆 Score: %-26d ║\n", scoreTotal.get()));
         sb.append(String.format("║ 🗺️  Zones explorées: %-15d ║\n", zonesExplorees.get()));
         sb.append("╚══════════════════════════════════════╝");
         return sb.toString();

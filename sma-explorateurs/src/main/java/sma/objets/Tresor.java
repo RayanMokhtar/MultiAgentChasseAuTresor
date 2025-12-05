@@ -7,17 +7,11 @@ import java.awt.Color;
  * Thread-safe
  */
 public class Tresor extends ObjetEnvironnement {
-    private final int valeur;
     private volatile boolean collecte;
 
-    public Tresor(int id, Position position, int valeur) {
+    public Tresor(int id, Position position) {
         super(id, position);
-        this.valeur = valeur;
         this.collecte = false;
-    }
-
-    public int getValeur() {
-        return valeur;
     }
 
     public synchronized boolean isCollecte() {
@@ -49,6 +43,6 @@ public class Tresor extends ObjetEnvironnement {
 
     @Override
     public String toString() {
-        return "💰 Trésor #" + id + " (valeur: " + valeur + ") à " + position + (collecte ? " [COLLECTÉ]" : "");
+        return "💰 Trésor #" + id + " à " + position + (collecte ? " [COLLECTÉ]" : "");
     }
 }

@@ -48,16 +48,8 @@ public class MainFrame extends JFrame implements Simulation.SimulationListener {
     }
 
     private void initialiserSimulation() {
-        // Créer une nouvelle carte avec les paramètres par défaut
-        Carte carte = new Carte(
-            600,  // largeur
-            600,  // hauteur
-            5,    // nombre de zones en X
-            5,    // nombre de zones en Y
-            15,   // nombre de trésors
-            10,   // nombre d'animaux
-            20    // nombre d'obstacles
-        );
+        // Créer une nouvelle carte avec les paramètres par défaut (9 zones 3x3)
+        Carte carte = new Carte();
         
         simulation = new Simulation(carte);
         simulation.ajouterListener(this);
@@ -88,21 +80,15 @@ public class MainFrame extends JFrame implements Simulation.SimulationListener {
     }
 
     private JPanel creerHeaderPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBackground(new Color(25, 25, 112));
-        panel.setBorder(BorderFactory.createEmptyBorder(10, 15, 10, 15));
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        panel.setBackground(new Color(50, 100, 50));
+        panel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
         
-        // Titre
-        JLabel titre = new JLabel("🏴‍☠️ Équipe Hybride d'Explorateurs - Chasse au Trésor");
-        titre.setFont(new Font("Arial", Font.BOLD, 20));
+        // Titre simple
+        JLabel titre = new JLabel("Chasse au Trésor - SMA");
+        titre.setFont(new Font("Arial", Font.BOLD, 16));
         titre.setForeground(Color.WHITE);
-        panel.add(titre, BorderLayout.WEST);
-        
-        // Sous-titre
-        JLabel sousTitre = new JLabel("CY Cergy Paris Université - Master IISC 2 Pro");
-        sousTitre.setFont(new Font("Arial", Font.ITALIC, 12));
-        sousTitre.setForeground(new Color(200, 200, 255));
-        panel.add(sousTitre, BorderLayout.EAST);
+        panel.add(titre);
         
         return panel;
     }
