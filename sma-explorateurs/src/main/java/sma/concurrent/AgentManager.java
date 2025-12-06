@@ -1,30 +1,30 @@
 package sma.concurrent;
 
 import sma.agents.Agent;
-import sma.environnement.Carte;
+import sma.simulation.Simulation;
 
 public class AgentManager extends Thread {
 
     private final Agent agent;
-    private final Carte carte;
+    private final Simulation simulation;
     private volatile boolean running = true;
     private final long delaiEnMiliSecondes;
     private static volatile boolean simulationTerminee = false; //on peut le faire en synchronized 
     //mais notifie aux autres threads que la simulation est bien terminée 
 
-    public AgentManager(Agent agent, Carte carte, long delaiEnMiliSecondes) {
+    public AgentManager(Agent agent, Simulation simulation, long delaiEnMiliSecondes) {
         this.agent = agent;
-        this.carte = carte;
+        this.simulation = simulation;
         this.delaiEnMiliSecondes = delaiEnMiliSecondes;
     }
 
     @Override
     public void run() {
         while (running && !simulationTerminee) {
-            if (carte.tousTresorsCollectes()) {
+            if (simulation.getCarte().tousTresorsCollectes()) {
                 if (!simulationTerminee) {
                     simulationTerminee = true;
-                    System.out.println("Simulation terminée ! tous trésors ont été collectés");
+                    simulation.arreter();  
                 }
                 break;
             }

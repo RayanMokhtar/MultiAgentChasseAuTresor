@@ -165,7 +165,7 @@ public class Simulation {
 
     private void ajouterAgent(Agent agent) {
         agents.add(agent);
-        AgentManager manager = new AgentManager(agent, carte, SimuPara.DELAY_MS);
+        AgentManager manager = new AgentManager(agent, this , SimuPara.DELAY_MS);
         agentManagers.add(manager);
     }
 
