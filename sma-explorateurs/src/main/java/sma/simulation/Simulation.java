@@ -1,207 +1,213 @@
 package sma.simulation;
 
-import java.util.*;
-import java.util.concurrent.*;
-import sma.agents.*;
-import sma.environnement.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 
-/**
- * Classe principale de simulation du système multi-agents
- * Gère le multithreading et la synchronisation
- */
+import sma.agents.Agent;
+import sma.agents.AgentCognitif;
+import sma.agents.AgentCommunicant;
+import sma.agents.AgentReactif;
+import sma.concurrent.AgentManager;
+import sma.environnement.Carte;
+import sma.environnement.Case;
+import sma.environnement.Zone;
+import sma.gui.SimuPara;
+import sma.objets.Animal;
+import sma.objets.Obstacle;
+import sma.objets.Tresor;
+
 public class Simulation {
-    
-    // Configuration par défaut
-    public static final int NB_AGENTS_COGNITIFS = 3;
-    public static final int NB_AGENTS_REACTIFS = 4;
-    
+
     private final Carte carte;
     private final List<Agent> agents;
-    private final List<AgentCommunicant> agentsCommunicants;
-    private final Statistiques stats;
-    
-    private ExecutorService executorAgents;
-    private ScheduledExecutorService schedulerStats;
-    
-    private volatile boolean enCours;
-    private volatile boolean pause;
-    
-    private final List<SimulationListener> listeners;
-
-    /**
-     * Interface pour écouter les événements de simulation
-     */
-    public interface SimulationListener {
-        void onUpdate();
-        void onTerminee();
-    }
+    private final List<AgentManager> agentManagers;
+    private final Random random;
+    private boolean running;
+    private long tempsDebut;
+    private long tempsFin;
 
     public Simulation() {
-        this(new Carte());
-    }
-
-    public Simulation(Carte carte) {
-        this.carte = carte;
-        this.agents = new CopyOnWriteArrayList<>();
-        this.agentsCommunicants = new CopyOnWriteArrayList<>();
-        this.stats = new Statistiques();
-        this.listeners = new CopyOnWriteArrayList<>();
-        this.enCours = false;
-        this.pause = false;
-        
+        this.carte = new Carte();
+        this.agents = new ArrayList<>();
+        this.agentManagers = new ArrayList<>();
+        this.random = new Random(); //aléatoire 
+        this.running = false;
+        //initialiser deux méthodes des objets 
+        initialiserObjets();
         initialiserAgents();
     }
 
-    private void initialiserAgents() {
-        // Créer les agents cognitifs
-        String[] nomsCognitifs = {"Einstein", "Newton", "Darwin"};
-        for (int i = 0; i < NB_AGENTS_COGNITIFS; i++) {
-            String nom = i < nomsCognitifs.length ? nomsCognitifs[i] : "Cognitif-" + (i + 1);
-            AgentCognitif agent = new AgentCognitif(nom, carte);
-            agent.setSimulation(this);
-            agents.add(agent);
-        }
-        
-        // Créer les agents réactifs
-        String[] nomsReactifs = {"Flash", "Bolt", "Storm", "Dash"};
-        for (int i = 0; i < NB_AGENTS_REACTIFS; i++) {
-            String nom = i < nomsReactifs.length ? nomsReactifs[i] : "Réactif-" + (i + 1);
-            AgentReactif agent = new AgentReactif(nom, carte);
-            agent.setSimulation(this);
-            agents.add(agent);
-        }
-        
-        // Créer les agents communicants (1 pour chaque 2 zones, sauf QG)
-        int nbZones = carte.getNombreZones();
-        int nbCommunicants = nbZones / 2;
-        int compteur = 0;
-        
-        for (Zone zone : carte.getZones()) {
-            if (!zone.estQG() && compteur < nbCommunicants) {
-                String nom = "Radio-" + zone.getId();
-                AgentCommunicant agent = new AgentCommunicant(nom, carte, zone);
-                agent.setSimulation(this);
-                agents.add(agent);
-                agentsCommunicants.add(agent);
-                compteur++;
+    private void initialiserObjets() {
+        for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
+            for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
+
+                //Partie zoneqg, dans les règles du rapport on a dit c'est sage
+                Zone zone = carte.getZone(zx, zy);
+                if (zx == 0 && zy == 0) {
+                    System.out.println("Zone qg skip prochaine itération ");
+                    continue;
+                }
+                //placer tresors valeurs aléatoires car pas très important ici 
+                placerTresors(zone, SimuPara.NB_TRESORS_PAR_ZONE);
+
+                // Placer les animaux
+                placerAnimaux(zone, SimuPara.NB_ANIMAUX_PAR_ZONE);
+
+                // Placer les obstacles
+                placerObstacles(zone, SimuPara.NB_OBSTACLES_PAR_ZONE);
             }
         }
-        
-        System.out.println("📊 Simulation initialisée:");
-        System.out.println("   - " + NB_AGENTS_COGNITIFS + " agents cognitifs");
-        System.out.println("   - " + NB_AGENTS_REACTIFS + " agents réactifs");
-        System.out.println("   - " + agentsCommunicants.size() + " agents communicants");
+    }
+
+    private void placerTresors(Zone zone, int nombre) {
+        int cpt = 0;
+        int tentatives = 0;
+
+        while (cpt < nombre && tentatives < 100) {
+            int x = random.nextInt(Zone.TAILLE);
+            int y = random.nextInt(Zone.TAILLE); //renvoie zone 1,2
+            Case caseAleatoire = zone.getCase(x, y); // case renvoie une case aléatoire .. 
+
+            //case non valide => null 
+            if (caseAleatoire != null && !caseAleatoire.hasObjet()) {
+                int valeurTresor = random.nextInt(100);
+                caseAleatoire.setObjet(new Tresor(valeurTresor));
+                cpt++;
+            }
+            tentatives++;
+        }
+    }
+
+    private void placerAnimaux(Zone zone, int nombre) {
+        int cpt = 0;
+        int tentatives = 0;
+
+        while (cpt < nombre && tentatives < 100) {
+            int x = random.nextInt(Zone.TAILLE);
+            int y = random.nextInt(Zone.TAILLE);
+            Case caseAleatoire = zone.getCase(x, y);
+            int valeurMaxDegats = SimuPara.MAX_DEGATS_ANIMAUX;
+            if (caseAleatoire != null && !caseAleatoire.hasObjet()) {
+                int valeursDegats = random.nextInt(valeurMaxDegats);
+                caseAleatoire.setObjet(new Animal("hérisson des ténébres", valeursDegats)); //faire une ressemblance avec une ortie (bouge pas masi pique)
+                cpt++;
+            }
+            tentatives++;
+        }
+    }
+
+    private void placerObstacles(Zone zone, int nombre) {
+        int cpt = 0;
+        int tentatives = 0;
+
+        while (cpt < nombre && tentatives < 100) {
+            int x = random.nextInt(Zone.TAILLE);
+            int y = random.nextInt(Zone.TAILLE);
+            Case caseAleatoire = zone.getCase(x, y);
+
+            if (caseAleatoire != null && !caseAleatoire.hasObjet()) {
+                caseAleatoire.setObjet(new Obstacle("Grand Rocher de Cergy"));
+                cpt++;
+            }
+            tentatives++;
+        }
+    }
+
+    private void initialiserAgents() {
+        Case qg = carte.getCaseQG();
+
+        //cognitifs explorent et si sont dans zone communicants => recoivent messages
+        for (int i = 0; i < SimuPara.NB_AGENTS_COGNITIFS; i++) {
+            ajouterAgent(new AgentCognitif(qg, carte));
+        }
+
+        //exploration simple réactifs pour 'linstant '
+        for (int i = 0; i < SimuPara.NB_AGENTS_REACTIFS; i++) {
+            ajouterAgent(new AgentReactif(qg, carte));
+        }
+
+        // M<N , si tous trésors collectés alors dans ce cas ... on se teleporte 
+        int zoneIndex = 1;
+        for (int i = 0; i < SimuPara.NB_AGENTS_COMMUNICANTS && zoneIndex < 9; i++) {
+            Zone zone = carte.getZoneById(zoneIndex);
+            if (zone != null) {
+                Case spawnCase = trouverCaseAccessibleDansZone(zone); //simplifier cette partie sinon agent cognitif mourra // ou on enleve logique take damage mais obfusquera animaux dans la map
+                if (spawnCase != null) {
+                    ajouterAgent(new AgentCommunicant(spawnCase, carte));
+                    System.out.println("Agent Communicant spawné dans Zone " + zoneIndex);
+                }
+            }
+            zoneIndex++;
+        }
+    }
+
+    private Case trouverCaseAccessibleDansZone(Zone zone) {
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c != null && c.isAccessible() && !c.hasObjet()) {
+                    return c;
+                }
+            }
+        }
+        // Si pas de case vide, prendre une accessible
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c != null && c.isAccessible()) {
+                    return c;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void ajouterAgent(Agent agent) {
+        agents.add(agent);
+        AgentManager manager = new AgentManager(agent, carte, SimuPara.DELAY_MS);
+        agentManagers.add(manager);
     }
 
     public void demarrer() {
-        if (enCours) return;
-        
-        enCours = true;
-        pause = false;
-        stats.demarrer();
-        
-        // Pool de threads pour les agents
-        executorAgents = Executors.newFixedThreadPool(agents.size());
-        
-        // Démarrer tous les agents
-        for (Agent agent : agents) {
-            executorAgents.submit(agent);
+        if (running) {
+            return;
         }
-        
-        // Scheduler pour les mises à jour statistiques
-        schedulerStats = Executors.newSingleThreadScheduledExecutor();
-        schedulerStats.scheduleAtFixedRate(() -> {
-            if (!pause) {
-                stats.incrementerIterations();
-                mettreAJourZonesExplorees();
-                notifierListeners();
-                
-                // Vérifier condition de fin
-                if (verifierFinSimulation()) {
-                    arreter();
-                }
-            }
-        }, 0, 100, TimeUnit.MILLISECONDS);
-        
-        System.out.println("🚀 Simulation démarrée!");
+        running = true;
+        tempsDebut = System.currentTimeMillis(); //pour compter => mais mm probleme que python retourne datetime actuel  en milisecondes 
+
+        for (AgentManager manager : agentManagers) {
+            manager.start();
+        }
     }
 
     public void arreter() {
-        if (!enCours) return;
-        
-        enCours = false;
-        stats.terminer();
-        
-        // Arrêter tous les agents
-        for (Agent agent : agents) {
-            agent.arreter();
+        running = false;
+        tempsFin = System.currentTimeMillis();
+        for (AgentManager manager : agentManagers) {
+            manager.stopAgent();
         }
-        
-        // Fermer les executors
-        if (executorAgents != null) {
-            executorAgents.shutdownNow();
-        }
-        if (schedulerStats != null) {
-            schedulerStats.shutdownNow();
-        }
-        
-        System.out.println("\n" + stats.toString());
-        System.out.println("🛑 Simulation terminée!");
-        
-        // Notifier les listeners
-        for (SimulationListener l : listeners) {
-            l.onTerminee();
-        }
+        afficherResultatsSimulationActuelle();
     }
 
-    public void togglePause() {
-        pause = !pause;
-        
-        for (Agent agent : agents) {
-            if (pause) {
-                agent.suspendre();
-            } else {
-                agent.reprendre();
-            }
-        }
-        
-        System.out.println(pause ? "⏸️ Simulation en pause" : "▶️ Simulation reprise");
+
+    public void afficherResultatsSimulationActuelle(){
+        long dureeSimulation = tempsFin - tempsDebut;
+        long dureeSecondes = dureeSimulation / 1000;
+        long minutes = dureeSecondes / 60;
+        long secondesRestantes = dureeSecondes % 60; //sinon minutes avec virgules
+        System.out.println("La simulation est terminée , la durée totale était de : "+minutes+" minutes et de "+secondesRestantes+ "secondes! bien joué");
+    }
+    
+    public boolean isRunning() {
+        return running;
     }
 
-    private void mettreAJourZonesExplorees() {
-        int count = 0;
-        for (Zone zone : carte.getZones()) {
-            if (zone.isExploree()) {
-                count++;
-            }
-        }
-        stats.setZonesExplorees(count);
+    public Carte getCarte() {
+        return carte;
     }
 
-    private boolean verifierFinSimulation() {
-        // Fin si tous les trésors sont collectés
-        return carte.getTousTresorsNonCollectes().isEmpty();
+    public List<Agent> getAgents() {
+        return agents;
     }
-
-    private void notifierListeners() {
-        for (SimulationListener l : listeners) {
-            l.onUpdate();
-        }
-    }
-
-    public void ajouterListener(SimulationListener listener) {
-        listeners.add(listener);
-    }
-
-    public void retirerListener(SimulationListener listener) {
-        listeners.remove(listener);
-    }
-
-    // Getters
-    public Carte getCarte() { return carte; }
-    public List<Agent> getAgents() { return new ArrayList<>(agents); }
-    public List<AgentCommunicant> getAgentsCommunicants() { return new ArrayList<>(agentsCommunicants); }
-    public Statistiques getStats() { return stats; }
-    public boolean isEnCours() { return enCours; }
-    public boolean isPause() { return pause; }
 }

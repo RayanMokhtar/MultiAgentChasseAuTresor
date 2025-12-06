@@ -1,59 +1,30 @@
 package sma.objets;
 
-import java.awt.Color;
+import sma.agents.Agent;
 
 /**
- * Représente un obstacle dans l'environnement
+ * Un obstacle qui bloque le passage. L'agent ne peut pas entrer sur cette case.
  */
-public class Obstacle extends ObjetEnvironnement {
-    
-    public enum TypeObstacle {
-        ROCHER("🪨", false, new Color(105, 105, 105)),
-        ARBRE("🌲", true, new Color(34, 139, 34)),
-        RIVIERE("🌊", true, new Color(30, 144, 255)),
-        MUR("🧱", false, new Color(178, 34, 34));
+public class Obstacle extends ObjetPassif {
 
-        private final String emoji;
-        private final boolean franchissable;
-        private final Color couleur;
+    private final String description;
 
-        TypeObstacle(String emoji, boolean franchissable, Color couleur) {
-            this.emoji = emoji;
-            this.franchissable = franchissable;
-            this.couleur = couleur;
-        }
-
-        public String getEmoji() { return emoji; }
-        public boolean isFranchissable() { return franchissable; }
-        public Color getCouleur() { return couleur; }
+    public Obstacle(String description) {
+        super();
+        this.description = description;
     }
 
-    private final TypeObstacle typeObstacle;
-    private final int coutTraversee;
-
-    public Obstacle(int id, Position position, TypeObstacle typeObstacle) {
-        super(id, position);
-        this.typeObstacle = typeObstacle;
-        this.coutTraversee = typeObstacle.isFranchissable() ? 2 : Integer.MAX_VALUE;
-    }
-
-    public TypeObstacle getTypeObstacle() { return typeObstacle; }
-    public boolean isFranchissable() { return typeObstacle.isFranchissable(); }
-    public int getCoutTraversee() { return coutTraversee; }
-
-    @Override
-    public String getType() {
-        return "Obstacle";
+    public String getDescription() {
+        return description;
     }
 
     @Override
-    public Color getCouleur() {
-        return typeObstacle.getCouleur();
+    public void interagir(Agent agent) {
+        //cette partie devra être gérée par l'agent, si détecte obstacle, avec sa range ou si caseAccessible a faire un truc comme ça .. contourner ..
     }
 
     @Override
     public String toString() {
-        return typeObstacle.getEmoji() + " " + typeObstacle.name() + " #" + id + 
-               " à " + position + (typeObstacle.isFranchissable() ? " [franchissable]" : " [bloquant]");
+        return String.format("Obstacle[id=%d, %s]", id, description);
     }
 }

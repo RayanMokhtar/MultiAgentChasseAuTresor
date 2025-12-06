@@ -1,336 +1,205 @@
 package sma.agents;
 
-import java.awt.Color;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import sma.environnement.*;
-import sma.objets.*;
-import sma.simulation.Simulation;
+import java.util.ArrayList;
+import java.util.List;
 
+import sma.environnement.Carte;
+import sma.environnement.Case;
+import sma.environnement.Zone;
+import sma.objets.Tresor;
 
-public abstract class Agent implements Runnable {
-    
-    // Identifiant unique généré automatiquement
-    private static final AtomicInteger compteurId = new AtomicInteger(0);
-    
+public abstract class Agent {
+
+    private static int compteurId = 0;
     protected final int id;
-    protected final String nom;
-    protected volatile Position position;
-    protected volatile int pointsDeVie;
-    protected final int pointsDeVieMax;
-    protected final int force;
-    protected volatile int energie;
-    protected final int energieMax;
-    protected final AtomicBoolean enVie;
-    protected final AtomicBoolean actif;
-    
-    protected final List<Tresor> tresorsCollectes;
-    protected final Carte carte;
-    protected volatile Zone zoneActuelle;
-    protected Simulation simulation;
-    
-    // Statistiques thread-safe
-    protected final AtomicInteger nombreCombats = new AtomicInteger(0);
-    protected final AtomicInteger nombreVictoires = new AtomicInteger(0);
-    protected final AtomicInteger nombreMorts = new AtomicInteger(0);
-    protected final AtomicInteger distanceParcourue = new AtomicInteger(0);
-    protected final AtomicInteger scoreTotal = new AtomicInteger(0);
-    
-    // Contrôle du thread
-    protected volatile boolean running = false;
-    protected final Object lockMouvement = new Object();
-    protected static final int DELAI_ACTION = 100; // ms entre chaque action
+    protected final TypologieAgent type;
+    protected int pvMax = 100;
+    protected int pv = 100;
+    protected Case caseActuelle;
+    protected boolean enVie = true;
+    protected Carte carte; // Référence à la carte pour le passage entre zones
 
-    public Agent(String nom, Carte carte, int pointsDeVieMax, int force, int energieMax) {
-        this.id = compteurId.incrementAndGet();
-        this.nom = nom;
+    protected final AgentStats stats;
+    protected final List<Tresor> tresorsCollectes = new ArrayList<>(); //à vérifier
+
+    public Agent(TypologieAgent type, Case positionInitiale, Carte carte) {
+        compteurId++;
+        this.id = compteurId;
+        this.type = type;
+        this.caseActuelle = positionInitiale;
         this.carte = carte;
-        this.pointsDeVieMax = pointsDeVieMax;
-        this.pointsDeVie = pointsDeVieMax;
-        this.force = force;
-        this.energieMax = energieMax;
-        this.energie = energieMax;
-        this.enVie = new AtomicBoolean(true);
-        this.actif = new AtomicBoolean(true);
-        this.tresorsCollectes = Collections.synchronizedList(new ArrayList<>());
-        
-        // Position initiale au QG
-        this.position = carte.getQG().getCentre().copy();
-        this.zoneActuelle = carte.getQG();
-        carte.getQG().ajouterAgent(this);
+        this.stats = new AgentStats();
+
+        if (positionInitiale != null) {
+            positionInitiale.ajouterAgent(this);
+        }
     }
 
-    public void setSimulation(Simulation simulation) {
-        this.simulation = simulation;
+    public int getId() {
+        return id;
     }
 
-    @Override
-    public void run() {
-        running = true;
-        System.out.println("🚀 " + nom + " démarre son exploration!");
-        
-        while (running && actif.get()) {
-            try {
-                if (!enVie.get()) {
-                    // Attendre avant réapparition
-                    Thread.sleep(2000);
-                    reapparaitre();
-                } else {
-                    agir();
+    public TypologieAgent getType() {
+        return type;
+    }
+
+    public int getPv() {
+        return pv;
+    }
+
+    public int getPvMax() {
+        return pvMax;
+    }
+
+    public boolean isAlive() {
+        return enVie;
+    }
+
+    public Case getCaseActuelle() {
+        return caseActuelle;
+    }
+
+    public Zone getZoneActuelle() {
+        return caseActuelle != null ? caseActuelle.getZone() : null;
+    }
+
+    public AgentStats getStats() {
+        return stats;
+    }
+
+    public List<Tresor> getTresorsCollectes() {
+        return tresorsCollectes;
+    }
+
+    //cases adjacentes 
+    public List<Case> getCasesAdjacentes() {
+        List<Case> adjacentes = new ArrayList<>();
+
+        if (caseActuelle == null || carte == null) {
+            return adjacentes;
+        }
+
+        int x = caseActuelle.getX();
+        int y = caseActuelle.getY();
+        Zone zone = caseActuelle.getZone();
+
+        //pas déplacement en diagonale haut, bas, gauche, droite
+        int[] horizontale = {0, 0, -1, 1};
+        int[] verticale = {-1, 1, 0, 0};
+
+        for (int i = 0; i < 4; i++) {
+            int newX = x + horizontale[i];
+            int newY = y + verticale[i];
+
+            // Dans la même zone
+            if (zone.estDansLimites(newX, newY)) {
+                Case c = zone.getCase(newX, newY);
+                if (c != null && c.isAccessible()) {
+                    adjacentes.add(c);
                 }
-                Thread.sleep(DELAI_ACTION);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        System.out.println("🛑 " + nom + " arrête son exploration.");
-    }
-
-    /**
-     * Méthode principale d'action - à implémenter par les sous-classes
-     */
-    public abstract void agir();
-
-    /**
-     * Retourne le type d'agent
-     */
-    public abstract String getTypeAgent();
-
-    /**
-     * Retourne la couleur de l'agent pour l'affichage
-     */
-    public abstract Color getCouleur();
-
-    /**
-     * Déplace l'agent vers une nouvelle position
-     */
-    public synchronized boolean deplacer(Position nouvellePosition) {
-        if (!enVie.get() || energie <= 0) return false;
-        
-        synchronized (lockMouvement) {
-            if (carte.positionAccessible(nouvellePosition)) {
-                // Mise à jour de la zone
-                Zone ancienneZone = zoneActuelle;
-                Zone nouvelleZone = carte.getZoneAt(nouvellePosition);
-                
-                if (ancienneZone != nouvelleZone) {
-                    ancienneZone.retirerAgent(this);
-                    nouvelleZone.ajouterAgent(this);
-                    zoneActuelle = nouvelleZone;
+            } //passage d'une zone à une autre => bords  avec les margins pour bien distinguer => à ajuster dans ihm
+            else {
+                Case caseAutreZone = getCaseZoneAdjacente(zone, x, y, horizontale[i], verticale[i]);
+                if (caseAutreZone != null && caseAutreZone.isAccessible()) {
+                    adjacentes.add(caseAutreZone);
                 }
-                
-                // Calcul distance
-                int dist = (int) position.distanceTo(nouvellePosition);
-                distanceParcourue.addAndGet(dist);
-                
-                // Déplacement
-                position = nouvellePosition;
-                energie--;
-                
-                return true;
             }
         }
-        return false;
+
+        return adjacentes;
     }
 
-    /**
-     * Déplace l'agent d'un pas vers une destination
-     */
-    public boolean deplacerVers(Position destination) {
-        if (destination == null) return false;
-        
-        int dx = Integer.compare(destination.getX(), position.getX());
-        int dy = Integer.compare(destination.getY(), position.getY());
-        
-        // Mouvement de plusieurs pixels à la fois
-        int vitesse = 5;
-        Position nouvellePos = new Position(
-            position.getX() + dx * vitesse,
-            position.getY() + dy * vitesse
-        );
-        
-        return deplacer(nouvellePos);
-    }
+    private Case getCaseZoneAdjacente(Zone zoneActuelle, int x, int y, int dx, int dy) {
+        int newZoneX = zoneActuelle.getZoneX();
+        int newZoneY = zoneActuelle.getZoneY();
+        int newCaseX = x;
+        int newCaseY = y;
+        if (dx == -1 && x == 0) {
+            newZoneX--;
+            newCaseX = Zone.TAILLE - 1;
+        } else if (dx == 1 && x == Zone.TAILLE - 1) {
+            newZoneX++;
+            newCaseX = 0;
+        } else if (dy == -1 && y == 0) {
+            newZoneY--;
+            newCaseY = Zone.TAILLE - 1;
+        } else if (dy == 1 && y == Zone.TAILLE - 1) {
 
-    /**
-     * Collecte un trésor (thread-safe)
-     */
-    public boolean collecterTresor(Tresor tresor) {
-        if (!enVie.get() || tresor == null) return false;
-        
-        synchronized (tresor) {
-            if (tresor.collecter()) {
-                tresorsCollectes.add(tresor);
-                scoreTotal.addAndGet(tresor.getValeur());
-                
-                if (simulation != null) {
-                    simulation.getStats().enregistrerTresorCollecte(tresor.getValeur());
-                }
-                
-                System.out.println("💰 " + nom + " a collecté un trésor de valeur " + tresor.getValeur() + "!");
-                return true;
-            }
+            newZoneY++;
+            newCaseY = 0;
+        } else {
+            return null; // Pas au bord
         }
-        return false;
+
+        // Récupérer la zone adjacente
+        Zone zoneAdjacente = carte.getZone(newZoneX, newZoneY);
+        if (zoneAdjacente == null) {
+            return null;
+        }
+
+        return zoneAdjacente.getCase(newCaseX, newCaseY);
     }
 
-    /**
-     * Combat un animal (thread-safe)
-     */
-    public synchronized boolean combattre(Animal animal) {
-        if (!enVie.get() || animal == null || !animal.isActif()) return true;
-        
-        nombreCombats.incrementAndGet();
-        if (simulation != null) {
-            simulation.getStats().enregistrerCombat();
+    //changer case que si accessible (obstacle seulement poru rendre choses intéressantes )
+    public boolean deplacerVers(Case destination) {
+        if (destination == null || !destination.isAccessible()) {
+            return false;
         }
-        
-        System.out.println("⚔️ " + nom + " combat " + animal.getTypeAnimal().name() + "!");
-        
-        // Combat simplifié
-        int degatsInfliges = this.force + (int)(Math.random() * 10);
-        int degatsRecus = animal.attaquer();
-        
-        animal.recevoirDegats(degatsInfliges);
-        recevoirDegats(degatsRecus);
-        
-        if (!animal.isActif()) {
-            nombreVictoires.incrementAndGet();
-            System.out.println("🏆 " + nom + " a vaincu " + animal.getTypeAnimal().name() + "!");
-            return true;
+
+        if (caseActuelle != null) {
+            caseActuelle.retirerAgent(this);
         }
-        
-        return false;
+
+        caseActuelle = destination;
+        destination.ajouterAgent(this);
+        stats.incrementerCasesVisitees();
+
+        return true;
     }
 
-    /**
-     * Reçoit des dégâts (thread-safe)
-     */
-    public synchronized void recevoirDegats(int degats) {
-        this.pointsDeVie -= degats;
-        System.out.println("💔 " + nom + " reçoit " + degats + " dégâts (PV: " + pointsDeVie + "/" + pointsDeVieMax + ")");
-        
-        if (this.pointsDeVie <= 0) {
-            mourir();
+    public void seFaireAttaquer(int dmg) {
+        pv -= dmg;
+        stats.ajouterDegats(dmg);
+        System.out.println("Agent " + id + " (" + type + "): s'est pris des dégats de" + dmg + " il reste " + pv + "/" + pvMax);
+        if (pv <= 0) {
+            pv = 0;
+            enVie = false;
+            stats.incrementerMorts();
+            System.out.println(" Agent " + id + " (" + type + "): est mort à " + caseActuelle + "");
+
         }
     }
 
-    /**
-     * Gère la mort de l'agent
-     */
-    public void mourir() {
-        enVie.set(false);
-        nombreMorts.incrementAndGet();
-        if (simulation != null) {
-            simulation.getStats().enregistrerMort();
+    public void collectTresor(Tresor t) {
+        tresorsCollectes.add(t);
+        stats.ajouterTresor(t.getValeur());
+    }
+
+    public void resetToQG() {
+        if (caseActuelle != null) {
+            caseActuelle.retirerAgent(this);
         }
-        System.out.println("💀 " + nom + " a été vaincu!");
+
+        Case qg = carte.getCaseQG();
+        this.caseActuelle = qg;
+        qg.ajouterAgent(this);
+
+        this.pv = pvMax;
+        this.enVie = true;
+        stats.incrementerRespawn();
     }
 
-    /**
-     * Réapparaît au QG
-     */
-    public void reapparaitre() {
-        synchronized (lockMouvement) {
-            Zone ancienneZone = zoneActuelle;
-            if (ancienneZone != null) {
-                ancienneZone.retirerAgent(this);
-            }
-            
-            this.position = carte.getQG().getCentre().copy();
-            this.zoneActuelle = carte.getQG();
-            carte.getQG().ajouterAgent(this);
-            this.pointsDeVie = pointsDeVieMax;
-            this.energie = energieMax;
-            this.enVie.set(true);
-            
-            System.out.println("🔄 " + nom + " réapparaît au QG!");
+    public void resetToCaseActuelle(Case caseActuelle) {
+        if (caseActuelle != null) {
+            caseActuelle.retirerAgent(this);
         }
-    }
 
-    /**
-     * Téléporte l'agent au QG (pour évacuation d'urgence)
-     */
-    public void teleporterAuQG() {
-        synchronized (lockMouvement) {
-            Zone ancienneZone = zoneActuelle;
-            if (ancienneZone != null) {
-                ancienneZone.retirerAgent(this);
-            }
-            
-            this.position = carte.getQG().getCentre().copy();
-            this.zoneActuelle = carte.getQG();
-            carte.getQG().ajouterAgent(this);
-            
-            System.out.println("✨ " + nom + " est téléporté au QG!");
-        }
+        
+        this.caseActuelle = caseActuelle;
+        caseActuelle.ajouterAgent(this);
+        this.pv = pvMax;
+        this.enVie = true;
+        stats.incrementerRespawn();
     }
-
-    /**
-     * Récupère de l'énergie et des PV au QG
-     */
-    public void reposer() {
-        if (zoneActuelle != null && zoneActuelle.estQG()) {
-            this.energie = Math.min(energie + 20, energieMax);
-            this.pointsDeVie = Math.min(pointsDeVie + 30, pointsDeVieMax);
-        }
-    }
-
-    /**
-     * Vérifie si l'agent est en danger (PV faibles)
-     */
-    public boolean estEnDanger() {
-        return pointsDeVie < pointsDeVieMax * 0.3;
-    }
-
-    /**
-     * Vérifie si l'agent a besoin d'aide
-     */
-    public boolean aBesoinAide() {
-        return estEnDanger() && !zoneActuelle.estQG();
-    }
-
-    // Méthodes de contrôle du thread
-    public void arreter() {
-        running = false;
-        actif.set(false);
-    }
-
-    public void suspendre() {
-        actif.set(false);
-    }
-
-    public void reprendre() {
-        actif.set(true);
-    }
-
-    // Getters (thread-safe)
-    public int getId() { return id; }
-    public String getNom() { return nom; }
-    public synchronized Position getPosition() { return position.copy(); }
-    public synchronized int getPointsDeVie() { return pointsDeVie; }
-    public int getPointsDeVieMax() { return pointsDeVieMax; }
-    public int getForce() { return force; }
-    public synchronized int getEnergie() { return energie; }
-    public int getEnergieMax() { return energieMax; }
-    public boolean isEnVie() { return enVie.get(); }
-    public boolean isActif() { return actif.get(); }
-    public List<Tresor> getTresorsCollectes() { return new ArrayList<>(tresorsCollectes); }
-    public Zone getZoneActuelle() { return zoneActuelle; }
-    public Carte getCarte() { return carte; }
-    
-    // Statistiques
-    public int getNombreCombats() { return nombreCombats.get(); }
-    public int getNombreVictoires() { return nombreVictoires.get(); }
-    public int getNombreMorts() { return nombreMorts.get(); }
-    public int getDistanceParcourue() { return distanceParcourue.get(); }
-    public int getScoreTotal() { return scoreTotal.get(); }
-
-    @Override
-    public String toString() {
-        return getTypeAgent() + " " + nom + " [PV: " + pointsDeVie + "/" + pointsDeVieMax + 
-               ", ⚡: " + energie + "/" + energieMax + "] à " + position;
-    }
+    public abstract void step();
 }
