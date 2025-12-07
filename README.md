@@ -1,69 +1,50 @@
-# 🏴‍☠️ SMA - Chasse au Trésor Multi-Agents
+# SMA - Chasse au Trésor Multi-Agents
 
-Simulation d'un système multi-agents où des explorateurs collaborent pour collecter des trésors sur une carte, tout en évitant les dangers.
+Projet de simulation multi-agents en Java.
 
-## 📋 Description
+## Description
 
-Le projet simule une **chasse au trésor** avec 3 types d'agents qui explorent une carte divisée en 9 zones (3x3), chaque zone contenant 100 cases (10x10).
+Des agents explorent une carte pour collecter des trésors tout en évitant les animaux dangereux.
 
-## 🤖 Types d'Agents
+**Carte** : 9 zones (3x3), chaque zone = 100 cases (10x10)
 
+## Les 3 types d'agents
 
-| Agent | Comportement | Particularité |
-|-------|--------------|---------------|
-| **Réactif** | Exploration aléatoire | Simple, peut mourir et respawn au QG |
-| **Cognitif** | Suit le plus court chemin (Dijkstra) | Reçoit les messages, secourt les agents blessés |
-| **Communicant** | Scanne les zones à distance | Envoie les positions des trésors/animaux aux cognitifs |
+- **Réactif** : se déplace aléatoirement, peut mourir
+- **Cognitif** : utilise Dijkstra pour trouver le chemin optimal, peut secourir les autres
+- **Communicant** : scanne la zone et envoie les infos (trésors, animaux) aux cognitifs
 
-## 🗺️ Éléments de la Carte
+## Objets sur la carte
 
-- **Trésors** 🟡 : À collecter par les agents
-- **Animaux** 🔴 : Infligent des dégâts aux agents
-- **Obstacles** ⬛ : Cases infranchissables
-- **QG** 🟢 : Point de respawn (Zone 0, Case 0,0)
+- Trésors : à collecter
+- Animaux : font des dégâts
+- Obstacles : bloquent le passage
+- QG : point de respawn
 
-## 🔄 Fonctionnement
-
-1. Les **Communicants** scannent leur zone et envoient des messages aux Cognitifs
-2. Les **Cognitifs** reçoivent les infos, calculent le chemin optimal (Dijkstra) et collectent les trésors
-3. Les **Réactifs** explorent aléatoirement
-4. Si un agent meurt → respawn au QG après un délai (peut être secouru par un Cognitif)
-5. Simulation terminée quand tous les trésors sont collectés
-
-## 🛠️ Lancer le projet
+## Lancer le projet
 
 ```bash
 cd sma-explorateurs
 mvn compile exec:java
 ```
 
-## 📁 Structure
+## Structure du code
 
 ```
-sma-explorateurs/
-├── agents/          # AgentReactif, AgentCognitif, AgentCommunicant
-├── environnement/   # Carte, Zone, Case
-├── objets/          # Tresor, Animal, Obstacle
-├── concurrent/      # AgentManager (threads)
-├── gui/             # Interface graphique (Dashboard, MainGui)
-└── simulation/      # Logique de simulation
+agents/          → les 3 types d'agents
+environnement/   → Carte, Zone, Case
+objets/          → Tresor, Animal, Obstacle
+concurrent/      → gestion des threads
+gui/             → interface graphique
+simulation/      → logique principale
 ```
 
-## ⚙️ Paramètres (SimuPara.java)
+## Paramètres modifiables (SimuPara.java)
 
-| Paramètre | Valeur par défaut |
-|-----------|-------------------|
-| Agents Réactifs | 5 |
-| Agents Cognitifs | 4 |
-| Agents Communicants | 3 |
-| Trésors par zone | 1 |
-| Animaux par zone | 2 |
-| Obstacles par zone | 5 |
+- Nombre d'agents (réactifs, cognitifs, communicants)
+- Nombre de trésors/animaux/obstacles par zone
+- Délai entre les actions
 
-## 📊 Algorithmes
+## Auteurs
 
-- **Dijkstra** : Calcul du plus court chemin pour les agents cognitifs
-- **Distance de Manhattan** : Estimation des distances entre cases
-
-## 👥 Auteurs
-MOKHTARI Rayan / TAGHELIT Wassim / HAMMAL Zahreddine
+MOKHTARI Rayan - TAGHELIT Wassim - HAMMAL Zahreddine
