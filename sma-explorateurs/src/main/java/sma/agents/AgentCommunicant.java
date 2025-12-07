@@ -46,30 +46,28 @@ public class AgentCommunicant extends Agent {
             System.out.println("Communicant " + id + ": Zone " + zoneActuelle.getId() + " vidée, téléportation...");
             teleporterVersNouvelleZone();
         }
-    }
+    }   
 
     private void scannerEtInformer(Zone zone) {
-        for (int x = 0; x < Zone.TAILLE; x++) {
-            for (int y = 0; y < Zone.TAILLE; y++) {
-                Case c = zone.getCase(x, y);
-                if (c == null) continue;
-                
-                ObjetPassif objet = c.getObjet();
-                if (objet == null) continue;
-                
-                // Trésor non collecté et pas encore signalé
-                if (objet instanceof Tresor && !((Tresor) objet).isCollecte() && !tresorsDejaSignales.contains(c)) {
-                    envoyerAuxCognitifsDansZone(Message.TypeMessage.TRESOR_TROUVE, c, zone);
-                    tresorsDejaSignales.add(c);
-                }
-                // Animal pas encore signalé
-                else if (objet instanceof Animal && !animauxDejaSignales.contains(c)) {
-                    envoyerAuxCognitifsDansZone(Message.TypeMessage.ANIMAL_DETECTE, c, zone);
-                    animauxDejaSignales.add(c);
-                }
+    for (int x = 0; x < Zone.TAILLE; x++) {
+        for (int y = 0; y < Zone.TAILLE; y++) {
+            Case c = zone.getCase(x, y);
+            if (c == null) continue;
+            
+            ObjetPassif objet = c.getObjet();
+            if (objet == null) continue;
+            
+            // Trésor non collecté - envoyer à chaque step (les cognitifs peuvent arriver à tout moment)
+            if (objet instanceof Tresor && !((Tresor) objet).isCollecte()) {
+                envoyerAuxCognitifsDansZone(Message.TypeMessage.TRESOR_TROUVE, c, zone);
+            }
+            // Animal - envoyer à chaque step aussi
+            else if (objet instanceof Animal) {
+                envoyerAuxCognitifsDansZone(Message.TypeMessage.ANIMAL_DETECTE, c, zone);
             }
         }
     }
+}
 
    
     private void envoyerAuxCognitifsDansZone(Message.TypeMessage type, Case position, Zone zone) {

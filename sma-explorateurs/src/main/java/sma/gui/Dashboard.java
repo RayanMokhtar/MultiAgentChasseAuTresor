@@ -20,10 +20,10 @@ import sma.objets.Tresor;
 import sma.simulation.Simulation;
 
 public class Dashboard extends JPanel {
-    
+
     private static final long serialVersionUID = 1L;
     private final Simulation simulation;
-    
+
     // Couleurs
     private static final Color COLOR_EMPTY = new Color(240, 240, 240);
     private static final Color COLOR_TRESOR = new Color(255, 215, 0); // Or
@@ -44,7 +44,7 @@ public class Dashboard extends JPanel {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        
+
         dessinerCarte(g2);
         dessinerAgents(g2);
         dessinerLegende(g2);
@@ -54,37 +54,37 @@ public class Dashboard extends JPanel {
         Carte carte = simulation.getCarte();
         int startX = 50;
         int startY = 50;
-        
+
         for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
             for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
                 Zone zone = carte.getZone(zx, zy);
                 int zonePixelX = startX + zx * (Zone.TAILLE * SimuPara.CASE_SIZE + SimuPara.ZONE_MARGIN);
                 int zonePixelY = startY + zy * (Zone.TAILLE * SimuPara.CASE_SIZE + SimuPara.ZONE_MARGIN);
-                
+
                 // Dessiner chaque case de la zone
                 for (int cx = 0; cx < Zone.TAILLE; cx++) {
                     for (int cy = 0; cy < Zone.TAILLE; cy++) {
                         Case c = zone.getCase(cx, cy);
                         int casePixelX = zonePixelX + cx * SimuPara.CASE_SIZE;
                         int casePixelY = zonePixelY + cy * SimuPara.CASE_SIZE;
-                        
+
                         // Couleur de la case
                         Color couleur = getCouleurCase(c, zx == 0 && zy == 0 && cx == 0 && cy == 0);
                         g2.setColor(couleur);
                         g2.fillRect(casePixelX, casePixelY, SimuPara.CASE_SIZE - 1, SimuPara.CASE_SIZE - 1);
-                        
+
                         // Bordure
                         g2.setColor(Color.LIGHT_GRAY);
                         g2.drawRect(casePixelX, casePixelY, SimuPara.CASE_SIZE - 1, SimuPara.CASE_SIZE - 1);
                     }
                 }
-                
+
                 // Bordure de la zone
                 g2.setColor(Color.BLACK);
                 g2.setStroke(new BasicStroke(2));
-                g2.drawRect(zonePixelX - 1, zonePixelY - 1, 
-                    Zone.TAILLE * SimuPara.CASE_SIZE + 1, Zone.TAILLE * SimuPara.CASE_SIZE + 1);
-                
+                g2.drawRect(zonePixelX - 1, zonePixelY - 1,
+                        Zone.TAILLE * SimuPara.CASE_SIZE + 1, Zone.TAILLE * SimuPara.CASE_SIZE + 1);
+
                 // Numéro de zone
                 g2.setFont(new Font("Arial", Font.BOLD, 10));
                 g2.drawString("Z" + zone.getId(), zonePixelX + 2, zonePixelY - 3);
@@ -96,7 +96,7 @@ public class Dashboard extends JPanel {
         if (isQG) {
             return COLOR_QG;
         }
-        
+
         if (c.hasObjet()) {
             ObjetPassif obj = c.getObjet();
             if (obj instanceof Tresor) {
@@ -108,36 +108,38 @@ public class Dashboard extends JPanel {
                 return COLOR_OBSTACLE;
             }
         }
-        
+
         return COLOR_EMPTY;
     }
 
     private void dessinerAgents(Graphics2D g2) {
         int startX = 50;
         int startY = 50;
-        
+
         for (Agent agent : simulation.getAgents()) {
             Case c = agent.getCaseActuelle();
-            if (c == null) continue;
-            
+            if (c == null) {
+                continue;
+            }
+
             Zone zone = c.getZone();
             int zonePixelX = startX + zone.getZoneX() * (Zone.TAILLE * SimuPara.CASE_SIZE + SimuPara.ZONE_MARGIN);
             int zonePixelY = startY + zone.getZoneY() * (Zone.TAILLE * SimuPara.CASE_SIZE + SimuPara.ZONE_MARGIN);
-            
+
             int agentX = zonePixelX + c.getX() * SimuPara.CASE_SIZE + SimuPara.CASE_SIZE / 2;
             int agentY = zonePixelY + c.getY() * SimuPara.CASE_SIZE + SimuPara.CASE_SIZE / 2;
-            
+
             // Couleur selon le type
             Color couleur = getCouleurAgent(agent);
             g2.setColor(couleur);
-            
+
             int size = SimuPara.CASE_SIZE - 2;
-            g2.fillOval(agentX - size/2, agentY - size/2, size, size);
-            
+            g2.fillOval(agentX - size / 2, agentY - size / 2, size, size);
+
             // Contour
             g2.setColor(Color.BLACK);
-            g2.drawOval(agentX - size/2, agentY - size/2, size, size);
-            
+            g2.drawOval(agentX - size / 2, agentY - size / 2, size, size);
+
             // ID de l'agent
             g2.setFont(new Font("Arial", Font.PLAIN, 8));
             g2.drawString(String.valueOf(agent.getId()), agentX - 2, agentY + 3);
@@ -146,10 +148,14 @@ public class Dashboard extends JPanel {
 
     private Color getCouleurAgent(Agent agent) {
         switch (agent.getType()) {
-            case REACTIF: return COLOR_AGENT_REACTIF;
-            case COGNITIF: return COLOR_AGENT_COGNITIF;
-            case COMMUNICANT: return COLOR_AGENT_COMMUNICANT;
-            default: return Color.BLACK;
+            case REACTIF:
+                return COLOR_AGENT_REACTIF;
+            case COGNITIF:
+                return COLOR_AGENT_COGNITIF;
+            case COMMUNICANT:
+                return COLOR_AGENT_COMMUNICANT;
+            default:
+                return Color.BLACK;
         }
     }
 
@@ -159,11 +165,11 @@ public class Dashboard extends JPanel {
         int carteHeight = carteWidth;
         int startX = 50; // même que dessinerCarte
         int startY = 50;
-        
+
         // Position légende : à droite de la carte avec marge
         int legendeX = startX + carteWidth + 40;
         int legendeY = startY + carteHeight - 200; // En bas
-        
+
         // Fond de la légende avec bordure arrondie
         int legendeWidth = 200;
         int legendeHeight = 220;
@@ -172,28 +178,34 @@ public class Dashboard extends JPanel {
         g2.setColor(Color.DARK_GRAY);
         g2.setStroke(new BasicStroke(2));
         g2.drawRoundRect(legendeX - 10, legendeY - 25, legendeWidth, legendeHeight, 15, 15);
-        
+
         // Titre
         g2.setFont(new Font("Arial", Font.BOLD, 16));
         g2.setColor(Color.BLACK);
         g2.drawString("LÉGENDE", legendeX, legendeY);
-        
+
         int y = legendeY + 30;
         g2.setFont(new Font("Arial", Font.PLAIN, 13));
-        
+
         // Cases
-        dessinerItemLegende(g2, legendeX, y, COLOR_TRESOR, "Trésor"); y += 22;
-        dessinerItemLegende(g2, legendeX, y, COLOR_ANIMAL, "Animal (danger)"); y += 22;
-        dessinerItemLegende(g2, legendeX, y, COLOR_OBSTACLE, "Obstacle"); y += 22;
-        dessinerItemLegende(g2, legendeX, y, COLOR_QG, "QG (respawn)"); y += 30;
-        
+        dessinerItemLegende(g2, legendeX, y, COLOR_TRESOR, "Trésor");
+        y += 22;
+        dessinerItemLegende(g2, legendeX, y, COLOR_ANIMAL, "Animal (danger)");
+        y += 22;
+        dessinerItemLegende(g2, legendeX, y, COLOR_OBSTACLE, "Obstacle");
+        y += 22;
+        dessinerItemLegende(g2, legendeX, y, COLOR_QG, "QG (respawn)");
+        y += 30;
+
         // Séparateur
         g2.setColor(Color.LIGHT_GRAY);
         g2.drawLine(legendeX, y - 15, legendeX + 170, y - 15);
-        
+
         // Agents
-        dessinerItemLegende(g2, legendeX, y, COLOR_AGENT_REACTIF, "Agent Réactif"); y += 22;
-        dessinerItemLegende(g2, legendeX, y, COLOR_AGENT_COGNITIF, "Agent Cognitif"); y += 22;
+        dessinerItemLegende(g2, legendeX, y, COLOR_AGENT_REACTIF, "Agent Réactif");
+        y += 22;
+        dessinerItemLegende(g2, legendeX, y, COLOR_AGENT_COGNITIF, "Agent Cognitif");
+        y += 22;
         dessinerItemLegende(g2, legendeX, y, COLOR_AGENT_COMMUNICANT, "Agent Communicant");
     }
 

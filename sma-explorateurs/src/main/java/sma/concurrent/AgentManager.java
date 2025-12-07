@@ -11,7 +11,7 @@ public class AgentManager extends Thread {
     private final long delaiEnMiliSecondes;
     private static volatile boolean simulationTerminee = false; //on peut le faire en synchronized 
     //mais notifie aux autres threads que la simulation est bien terminée 
-    private static final int MULTIPLICATEUR_RESPAWN =  100;  // Facteur de pénalité
+    private static final int MULTIPLICATEUR_RESPAWN = 100;  // Facteur de pénalité
 
     public AgentManager(Agent agent, Simulation simulation, long delaiEnMiliSecondes) {
         this.agent = agent;
@@ -25,15 +25,15 @@ public class AgentManager extends Thread {
             if (simulation.getCarte().tousTresorsCollectes()) {
                 if (!simulationTerminee) {
                     simulationTerminee = true;
-                    simulation.arreter();  
+                    simulation.arreter();
                 }
                 break;
             }
-            
+
             if (agent.isAlive()) {
                 agent.step();
                 agent.getStats().incrementerIterations();
-            
+
             } else {
                 try {
                     Thread.sleep(delaiEnMiliSecondes * MULTIPLICATEUR_RESPAWN); //reset temps réapparition en théroei on est sur du 100*100 donc 10 secondes 
@@ -61,8 +61,7 @@ public class AgentManager extends Thread {
     public Agent getAgent() {
         return agent;
     }
-    
-   
+
     public static boolean isSimulationTerminee() {
         return simulationTerminee;
     }
