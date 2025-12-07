@@ -1,260 +1,178 @@
 package sma.agents;
 
-import sma.environnement.*;
-import sma.objets.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
-import java.awt.Color;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import sma.environnement.Carte;
+import sma.environnement.Case;
+import sma.environnement.Zone;
+import sma.objets.Animal;
+import sma.objets.ObjetPassif;
+import sma.objets.Tresor;
 
-/**
- * Agent Communicant (Sentinelle) - Agent stationnaire qui observe et partage des informations
- * 
- * RÈGLES DU TP:
- * - Stationnaire (ne bouge pas)
- * - Observe la zone assignée et collecte des informations
- * - Communique les informations aux agents qui entrent dans sa zone
- * - NE PEUT PAS secourir ou téléporter les agents
- * - Les agents cognitifs utilisent ses informations dans leurs beliefs
- */
 public class AgentCommunicant extends Agent {
-    
-    private final Zone zoneAssignee;
-    private final Map<String, Object> informationsZone;
-    private final List<Message> messagesRecus;
-    private final Set<Agent> agentsInformes;
-    private volatile long derniereMiseAJour;
-    
-    private static final Color COULEUR = new Color(148, 0, 211); // Violet
-    private static final long INTERVALLE_MAJ = 1000; // 1 seconde (comme dans les règles)
+    // Ensemble partagé pour empêcher plusieurs communicants d'occuper la même zone.
+    private static final Set<Integer> zonesOccupees = new HashSet<>();
 
-    /**
-     * Message transmis entre agents communicants
-     */
-    public static class Message {
-        public enum TypeMessage {
-            ALERTE_DANGER("⚠️"),
-            TRESOR_TROUVE("💰"),
-            ZONE_SURE("✅"),
-            AGENT_EN_DANGER("🆘"),
-            INFO_ZONE("📍");
-
-            private final String icone;
-            TypeMessage(String icone) { this.icone = icone; }
-            public String getIcone() { return icone; }
-        }
-
-        private final TypeMessage type;
-        private final String contenu;
-        private final Agent expediteur;
-        private final Zone zone;
-        private final long timestamp;
-
-        public Message(TypeMessage type, String contenu, Agent expediteur, Zone zone) {
-            this.type = type;
-            this.contenu = contenu;
-            this.expediteur = expediteur;
-            this.zone = zone;
-            this.timestamp = System.currentTimeMillis();
-        }
-
-        public TypeMessage getType() { return type; }
-        public String getContenu() { return contenu; }
-        public Agent getExpediteur() { return expediteur; }
-        public Zone getZone() { return zone; }
-        public long getTimestamp() { return timestamp; }
-
-        @Override
-        public String toString() {
-            return type.getIcone() + " [" + type + "] " + contenu;
+    public static Set<Integer> getZonesOccupeesSnapshot() {
+        synchronized (zonesOccupees) {
+            return new HashSet<>(zonesOccupees);
         }
     }
 
-    public AgentCommunicant(String nom, Carte carte, Zone zoneAssignee) {
-        super(nom, carte, 60, 5); // Peu de PV/force
-        this.zoneAssignee = zoneAssignee;
-        this.position = zoneAssignee.getCentre();
-        this.zoneActuelle = zoneAssignee;
-        this.informationsZone = new ConcurrentHashMap<>();
-        this.messagesRecus = new CopyOnWriteArrayList<>();
-        this.agentsInformes = Collections.synchronizedSet(new HashSet<>());
-        this.derniereMiseAJour = 0;
+    private final Set<Integer> zonesVisitees = new HashSet<>();
+    private final Set<Case> tresorsDejaSignales = new HashSet<>();
+    private final Set<Case> animauxDejaSignales = new HashSet<>();
+    // private int maxTpAutorisees = 2;
+    public AgentCommunicant(Case positionInitiale, Carte carte) {
+        super(TypologieAgent.COMMUNICANT, positionInitiale, carte);
         
-        // S'enregistrer dans la zone
-        zoneAssignee.ajouterAgent(this);
-        mettreAJourInformations();
+        if (positionInitiale != null && positionInitiale.getZone() != null) {
+            zonesVisitees.add(positionInitiale.getZone().getId());
+            synchronized (zonesOccupees) {
+                zonesOccupees.add(positionInitiale.getZone().getId());
+            }
+        }
     }
 
     @Override
-    public void agir() {
-        if (!enVie.get()) return;
+    public void seFaireAttaquer(int dmg) {
+        //immuned
+    }
 
-        // 1. Mettre à jour les informations régulièrement (toutes les 1 seconde)
-        long maintenant = System.currentTimeMillis();
-        if (maintenant - derniereMiseAJour > INTERVALLE_MAJ) {
-            mettreAJourInformations();
-            derniereMiseAJour = maintenant;
-        }
-
-        // 2. Informer les nouveaux agents dans la zone
-        informerAgents();
-
-        // 3. Traiter les messages reçus
-        traiterMessages();
-
-        // 4. Émettre des alertes si nécessaire
-        verifierEtEmettre();
-
-        // 5. Rester dans la zone (ne pas bouger - stationnaire)
-        if (!zoneAssignee.contientPosition(position)) {
-            position = zoneAssignee.getCentre();
+    @Override
+    public void step() {
+        Zone zoneActuelle = caseActuelle.getZone();
+        
+        // 1. Scanner et informer les cognitifs présents dans cette zone
+        scannerEtInformer(zoneActuelle);
+        
+        // 2. Si plus de trésors dans la zone, se téléporter ailleurs
+        if (compterTresorsRestants(zoneActuelle) == 0) {
+            System.out.println("Communicant " + id + ": Zone " + zoneActuelle.getId() + " vidée, téléportation...");
+            teleporterVersNouvelleZone();
         }
     }
 
-    private void mettreAJourInformations() {
-        informationsZone.clear();
-        
-        List<Tresor> tresors = zoneAssignee.getTresorsNonCollectes();
-        List<Animal> animaux = zoneAssignee.getAnimaux();
-        List<Obstacle> obstacles = zoneAssignee.getObstacles();
-        
-        informationsZone.put("zone_id", zoneAssignee.getId());
-        informationsZone.put("tresors_disponibles", tresors.size());
-        informationsZone.put("animaux_presents", animaux.size());
-        informationsZone.put("obstacles", obstacles.size());
-        informationsZone.put("niveau_danger", calculerNiveauDanger(animaux));
-        informationsZone.put("exploree", zoneAssignee.isExploree());
-        // Ne plus partager les positions exactes pour éviter la clairvoyance
-    }
-
-    private int calculerNiveauDanger(List<Animal> animaux) {
-        int danger = 0;
-        for (Animal animal : animaux) {
-            if (animal.isActif()) {
-                danger += animal.getForce();
-            }
-        }
-        return danger;
-    }
-
-    private void informerAgents() {
-        List<Agent> agentsDansZone = zoneAssignee.getAgentsPresents();
-        
-        for (Agent agent : agentsDansZone) {
-            if (agent != this && !agentsInformes.contains(agent)) {
-                transmettreInformations(agent);
-                agentsInformes.add(agent);
-            }
-        }
-        
-        // Retirer les agents qui ont quitté la zone
-        agentsInformes.removeIf(a -> !agentsDansZone.contains(a));
-    }
-
-    private void transmettreInformations(Agent agent) {
-        int tresors = (int) informationsZone.getOrDefault("tresors_disponibles", 0);
-        int animaux = (int) informationsZone.getOrDefault("animaux_presents", 0);
-        int danger = (int) informationsZone.getOrDefault("niveau_danger", 0);
-        
-        StringBuilder info = new StringBuilder();
-        info.append("📡 ").append(nom).append(" informe ").append(agent.getNom()).append(":\n");
-        info.append("   Zone ").append(zoneAssignee.getId());
-        info.append(" | 💰 Trésors: ").append(tresors);
-        info.append(" | 🐾 Animaux: ").append(animaux);
-        info.append(" | ⚠️ Danger: ").append(danger);
-        
-        System.out.println(info);
-        
-        // Pas de positions exactes pour éviter le guidage parfait
-    }
-
-    private void traiterMessages() {
-        Iterator<Message> it = messagesRecus.iterator();
-        while (it.hasNext()) {
-            Message msg = it.next();
-            
-            switch (msg.getType()) {
-                case AGENT_EN_DANGER:
-                    // Relayer aux agents de la zone
-                    for (Agent agent : zoneAssignee.getAgentsPresents()) {
-                        if (agent != this && agent instanceof AgentCognitif) {
-                            System.out.println("📢 " + nom + " relaie alerte à " + agent.getNom());
-                        }
-                    }
-                    break;
-                    
-                case TRESOR_TROUVE:
-                    mettreAJourInformations();
-                    break;
-                    
-                default:
-                    break;
-            }
-        }
-        messagesRecus.clear();
-    }
-
-    private void verifierEtEmettre() {
-        // Vérifier si un agent est en danger dans la zone
-        for (Agent agent : zoneAssignee.getAgentsPresents()) {
-            if (agent != this && agent.estEnDanger()) {
-                diffuserMessage(new Message(
-                    Message.TypeMessage.AGENT_EN_DANGER,
-                    agent.getNom() + " en danger dans zone " + zoneAssignee.getId(),
-                    this,
-                    zoneAssignee
-                ));
-            }
-        }
-    }
-
-    /**
-     * Reçoit un message d'un autre agent
-     */
-    public void recevoirMessage(Message message) {
-        messagesRecus.add(message);
-    }
-
-    /**
-     * Diffuse un message à tous les agents communicants via la simulation
-     */
-    public void diffuserMessage(Message message) {
-        if (simulation != null) {
-            for (AgentCommunicant ac : simulation.getAgentsCommunicants()) {
-                if (ac != this) {
-                    ac.recevoirMessage(message);
+    private void scannerEtInformer(Zone zone) {
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c == null) continue;
+                
+                ObjetPassif objet = c.getObjet();
+                if (objet == null) continue;
+                
+                // Trésor non collecté et pas encore signalé
+                if (objet instanceof Tresor && !((Tresor) objet).isCollecte() && !tresorsDejaSignales.contains(c)) {
+                    envoyerAuxCognitifsDansZone(Message.TypeMessage.TRESOR_TROUVE, c, zone);
+                    tresorsDejaSignales.add(c);
+                }
+                // Animal pas encore signalé
+                else if (objet instanceof Animal && !animauxDejaSignales.contains(c)) {
+                    envoyerAuxCognitifsDansZone(Message.TypeMessage.ANIMAL_DETECTE, c, zone);
+                    animauxDejaSignales.add(c);
                 }
             }
         }
     }
 
-    @Override
-    public synchronized boolean deplacer(Position nouvellePosition) {
-        // L'agent communicant ne bouge pas (stationnaire)
-        return false;
+   
+    private void envoyerAuxCognitifsDansZone(Message.TypeMessage type, Case position, Zone zone) {
+        Message msg = new Message(this.id, type, position, zone.getId());
+        
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case caseRecupere = zone.getCase(x, y);
+                if (caseRecupere == null) continue;
+                
+                List<Agent> agentsSurCase = caseRecupere.getAgents();
+                if (agentsSurCase == null || agentsSurCase.isEmpty()) continue;
+                
+                //Créer une copie pour éviter cette erreur 
+                List<Agent> agentsCopie = new ArrayList<>(agentsSurCase);
+                for (Agent a : agentsCopie) {
+                    if (a instanceof AgentCognitif) {
+                        AgentCognitif cog = (AgentCognitif) a;
+                        cog.recevoirMessage(msg);
+                    }
+                }
+            }
+        }
     }
 
-    @Override
-    public String getTypeAgent() {
-        return "📡 Communicant";
+    private int compterTresorsRestants(Zone zone) {
+        int count = 0;
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c != null && c.getObjet() instanceof Tresor) {
+                    if (!((Tresor) c.getObjet()).isCollecte()) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
     }
 
-    @Override
-    public Color getCouleur() {
-        return COULEUR;
+    private void teleporterVersNouvelleZone() {
+        Zone ancienneZone = caseActuelle.getZone();
+        // Chercher une zone non visitée avec des trésors
+        for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
+            for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
+                if (zx == 0 && zy == 0) continue; // Skip QG
+                Zone zone = carte.getZone(zx, zy);
+                if (zone != null && !zonesVisitees.contains(zone.getId()) && compterTresorsRestants(zone) > 0) {
+                    boolean zoneLibre;
+                    synchronized (zonesOccupees) {
+                        zoneLibre = !zonesOccupees.contains(zone.getId());
+                        if (zoneLibre) {
+                            zonesOccupees.remove(ancienneZone.getId());
+                            zonesOccupees.add(zone.getId());
+                        }
+                    }
+                    if (!zoneLibre) {
+                        continue;
+                    }
+
+                    Case caseSafe = trouverCaseSafe(zone);
+                    if (caseSafe != null) {
+                        caseActuelle = caseSafe;
+                        zonesVisitees.add(zone.getId());
+                        tresorsDejaSignales.clear();
+                        animauxDejaSignales.clear();
+                        System.out.println("Communicant " + id + ": Téléporté vers Zone " + zone.getId() + " (nouvelle, libre)");
+                        return;
+                    } else {
+                        // Si aucune case safe, libérer la réservation de zone.
+                        synchronized (zonesOccupees) {
+                            zonesOccupees.remove(zone.getId());
+                            zonesOccupees.add(ancienneZone.getId());
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Toutes les zones visitées -> reset
+        System.out.println("Communicant " + id + ": Toutes zones visitées, reset");
+        zonesVisitees.clear();
+        tresorsDejaSignales.clear();
+        animauxDejaSignales.clear();
     }
 
-    public Zone getZoneAssignee() {
-        return zoneAssignee;
-    }
-
-    public Map<String, Object> getInformationsZone() {
-        return new HashMap<>(informationsZone);
-    }
-
-    @Override
-    public String toString() {
-        return super.toString() + " [Zone: " + zoneAssignee.getId() + "]";
+    private Case trouverCaseSafe(Zone zone) {
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c != null && c.isAccessible() && !(c.getObjet() instanceof Animal)) {
+                    return c;
+                }
+            }
+        }
+        return null;
     }
 }

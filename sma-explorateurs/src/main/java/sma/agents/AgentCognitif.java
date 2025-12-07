@@ -26,42 +26,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * - Intentions: Plan d'action en cours
  */
 public class AgentCognitif extends Agent {
+    private static final Set<Integer> ZONES_RESERVEES_COGNITIFS = new HashSet<>();
     
-    public enum Mission {
-        CHERCHER_TRESOR("🎯 Cherche trésor"),
-        ACCOMPAGNER_AGENT("🤝 Accompagne"),
-        EXPLORER_ZONE("🔍 Explore"),
-        RETOUR_QG("🏠 Retour QG"),
-        SECOURIR_AGENT("🚑 Secours"),
-        REPOS("😴 Repos"),
-        FUIR_VERS_TRESOR("🏃 Fuit vers trésor"),
-        AUCUNE("⏸️ Attente");
-
-        private final String description;
-        Mission(String description) { this.description = description; }
-        public String getDescription() { return description; }
-    }
-
-    private volatile Mission missionActuelle;
-    private final Queue<Position> plan;
-    private volatile Agent agentASecourir;
-    private volatile Zone zoneCible;
-    private volatile Tresor tresorCible;
-    private final Set<Zone> zonesExplorees;
-    private final Map<Zone, List<Tresor>> connaissanceTresors;
+    private final Queue<Message> messagesRecus = new LinkedList<>();
+    private final List<Case> tresorsConnus = new ArrayList<>();
+    private final Set<Case> casesAEviter = new HashSet<>();
+    private Case destination = null;
+    private final Random random = new Random();
     
-    // BDI - Beliefs (mis à jour par sentinelle)
-    private Map<Position, String> beliefsDangers;
-
-    private Position cibleEvitement;
-    private long evitementExpireMs;
-    private static final long EVITEMENT_COOLDOWN_MS = 2000;
-    
-    private static final Color COULEUR = new Color(0, 100, 255); // Bleu
-    
-    // Même vision que réactif
-    public static final int RANGE_VISION = 3;
-    public static final int VISION_PIXELS = RANGE_VISION * 20;
+    private final LinkedList<Case> historiqueRecent = new LinkedList<>();
+    private static final int TAILLE_HISTORIQUE = 5;
 
     public AgentCognitif(String nom, Carte carte) {
         super(nom, carte, 120, 35);
@@ -89,363 +63,109 @@ public class AgentCognitif extends Agent {
     }
 
     @Override
-    public void agir() {
-        if (!enVie.get()) return;
-
-        if (gererEvitementActif()) return;
-
-        // 1. Observer l'environnement
-        observer();
-
-        // 2. Vérifier si un agent a besoin d'aide (priorité haute)
-        if (missionActuelle != Mission.SECOURIR_AGENT) {
-            Agent agentEnDanger = trouverAgentEnDanger();
-            if (agentEnDanger != null) {
-                lancerMissionSecours(agentEnDanger);
-            }
-        }
-
-        // 3. Gérer les dangers immédiats
-        if (gererDangersImmediats()) return;
-
-        // 4. Vérifier énergie et PV - sauf si déjà au QG
-        if (doitRentrerQG() && !zoneActuelle.estQG()) {
-            if (missionActuelle != Mission.RETOUR_QG) {
-                definirMission(Mission.RETOUR_QG);
-            }
-        }
-
-        // 5. Choisir une nouvelle mission si nécessaire
-        if (missionActuelle == Mission.AUCUNE || plan.isEmpty()) {
-            choisirNouvelleMission();
-        }
-
-        // 6. Exécuter le plan
-        executerPlan();
+    public void step() {
+        traiterMessages();
+        nettoyerTresorsCollectes();
+        deciderAction();
     }
 
-    private void observer() {
-        Zone zone = zoneActuelle;
-        if (zone != null && !zonesExplorees.contains(zone)) {
-            zonesExplorees.add(zone);
-            zone.setExploree(true);
-            
-            // Partager l'info avec les autres agents via ressources partagées
-            if (simulation != null && simulation.getRessourcesPartagees() != null) {
-                simulation.getRessourcesPartagees().marquerZoneExploree(zone);
-            }
-            
-            // Mémoriser les trésors
-            List<Tresor> tresors = zone.getTresorsNonCollectes();
-            if (!tresors.isEmpty()) {
-                connaissanceTresors.put(zone, new ArrayList<>(tresors));
-            }
-            
-            System.out.println("🔍 " + nom + " explore la zone " + zone.getId());
-        }
-        
-        // Mettre à jour les infos partagées sur cet agent
-        if (simulation != null && simulation.getRessourcesPartagees() != null) {
-            simulation.getRessourcesPartagees().mettreAJourInfoAgent(this, missionActuelle.getDescription());
-        }
-    }
-
-    private Agent trouverAgentEnDanger() {
-        if (simulation == null) return null;
-        
-        for (Agent agent : simulation.getAgents()) {
-            if (agent != this && agent.aBesoinAide() && agent.isEnVie()) {
-                return agent;
-            }
-        }
-        return null;
-    }
-
-    private void lancerMissionSecours(Agent agent) {
-        this.agentASecourir = agent;
-        this.zoneCible = agent.getZoneActuelle();
-        definirMission(Mission.SECOURIR_AGENT);
-        System.out.println("🚑 " + nom + " part secourir " + agent.getNom() + "!");
-    }
-
-    private boolean gererDangersImmediats() {
-        Zone zone = zoneActuelle;
-        if (zone == null) return false;
-        
-        // Trouver l'animal le plus proche
-        Animal animalDangereux = null;
-        double distanceMin = Double.MAX_VALUE;
-        
-        for (Animal animal : zone.getAnimaux()) {
-            if (animal.isActif()) {
-                double distance = position.distanceTo(animal.getPosition());
-                if (distance <= VISION_PIXELS && distance < distanceMin) {
-                    distanceMin = distance;
-                    animalDangereux = animal;
-                }
-            }
-        }
-        
-        if (animalDangereux == null) return false;
-        
-        // PRIORITÉ: FUIR loin de l'animal d'abord!
-        System.out.println("🏃 " + nom + " fuit l'animal!");
-        missionActuelle = Mission.FUIR_VERS_TRESOR;
-        Position cibleFuite = pointOppose(animalDangereux.getPosition(), 100);
-        if (cibleFuite != null) {
-            cibleEvitement = cibleFuite;
-            evitementExpireMs = System.currentTimeMillis() + EVITEMENT_COOLDOWN_MS;
-            return deplacerVers(cibleFuite);
-        }
-        return fuirDe(animalDangereux.getPosition());
-    }
-    
-    /**
-     * Fuit en direction opposée au danger
-     */
-    /**
-     * Fuit loin d'une position de danger - logique améliorée
-     */
-    private boolean fuirDe(Position danger) {
-        // Direction opposée à l'animal
-        int dx = Integer.compare(position.getX(), danger.getX());
-        int dy = Integer.compare(position.getY(), danger.getY());
-        
-        // Si dx et dy sont 0 (même position), choisir une direction aléatoire
-        if (dx == 0 && dy == 0) {
-            dx = (int)(Math.random() * 3) - 1;
-            dy = (int)(Math.random() * 3) - 1;
-        }
-        
-        int vitesse = 15; // Fuite rapide!
-        
-        // Essayer plusieurs directions de fuite
-        Position[] fuites = {
-            new Position(position.getX() + dx * vitesse, position.getY() + dy * vitesse),
-            new Position(position.getX() + dx * vitesse, position.getY()),
-            new Position(position.getX(), position.getY() + dy * vitesse),
-            new Position(position.getX() - dy * vitesse, position.getY() + dx * vitesse), // Perpendiculaire
-            new Position(position.getX() + dy * vitesse, position.getY() - dx * vitesse)  // Perpendiculaire autre sens
-        };
-        
-        for (Position fuite : fuites) {
-            if (carte.positionAccessible(fuite)) {
-                return deplacer(fuite);
-            }
-        }
-        
-        return false;
-    }
-    
-    private boolean doitRentrerQG() {
-        return pointsDeVie < pointsDeVieMax * 0.25;
-    }
-
-    private void choisirNouvelleMission() {
-        // Si au QG avec peu de vie/énergie, se reposer
-        if (zoneActuelle.estQG() && (pointsDeVie < pointsDeVieMax * 0.8)) {
-            definirMission(Mission.REPOS);
-            return;
-        }
-
-        // Chercher un trésor connu
-        Tresor tresorProche = trouverTresorConnu();
-        if (tresorProche != null) {
-            this.tresorCible = tresorProche;
-            definirMission(Mission.CHERCHER_TRESOR);
-            return;
-        }
-
-        // Explorer une nouvelle zone
-        Zone zoneNonExploree = trouverZoneNonExploree();
-        if (zoneNonExploree != null) {
-            this.zoneCible = zoneNonExploree;
-            definirMission(Mission.EXPLORER_ZONE);
-            return;
-        }
-
-        // Par défaut: retour au QG
-        definirMission(Mission.RETOUR_QG);
-    }
-
-    private void definirMission(Mission mission) {
-        // Éviter le spam de logs si la mission ne change pas
-        if (missionActuelle == mission) {
-            return;
-        }
-        
-        // Libérer les réservations de l'ancienne mission
-        RessourcesPartagees ressources = simulation.getRessourcesPartagees();
-        if (missionActuelle == Mission.EXPLORER_ZONE && mission != Mission.EXPLORER_ZONE) {
-            ressources.libererZone(id);
-        }
-        if (missionActuelle == Mission.CHERCHER_TRESOR && mission != Mission.CHERCHER_TRESOR) {
-            ressources.libererTresorParAgent(id);
-        }
-        
-        this.missionActuelle = mission;
-        this.plan.clear();
-        calculerPlan();
-        System.out.println("📋 " + nom + " : " + mission.getDescription());
-    }
-
-    private void calculerPlan() {
-        Position destination = null;
-        
-        switch (missionActuelle) {
-            case CHERCHER_TRESOR:
-                if (tresorCible != null) {
-                    destination = tresorCible.getPosition();
-                }
-                break;
-            case EXPLORER_ZONE:
-                if (zoneCible != null) {
-                    destination = zoneCible.getCentre();
-                }
-                break;
-            case SECOURIR_AGENT:
-                if (agentASecourir != null) {
-                    destination = agentASecourir.getPosition();
-                }
-                break;
-            case RETOUR_QG:
-            case REPOS:
-                destination = carte.getQG().getCentre();
-                break;
-            default:
-                break;
-        }
-
-        if (destination != null) {
-            construireChemin(destination);
-        }
-    }
-
-    private void construireChemin(Position destination) {
-        plan.clear();
-        Position current = position.copy();
-        int maxEtapes = 200;
-        int etape = 0;
-        
-        while (!positionsProches(current, destination) && etape < maxEtapes) {
-            int dx = Integer.compare(destination.getX(), current.getX());
-            int dy = Integer.compare(destination.getY(), current.getY());
-            
-            int pas = 10;
-            Position next = new Position(current.getX() + dx * pas, current.getY() + dy * pas);
-            
-            if (carte.positionAccessible(next)) {
-                plan.add(next);
-                current = next;
-            } else {
-                // Contournement simple
-                Position alt1 = new Position(current.getX() + dx * pas, current.getY());
-                Position alt2 = new Position(current.getX(), current.getY() + dy * pas);
+    private void traiterMessages() {
+        synchronized (this) {
+            while (!messagesRecus.isEmpty()) {
+                Message msg = messagesRecus.poll();
                 
-                if (carte.positionAccessible(alt1)) {
-                    plan.add(alt1);
-                    current = alt1;
-                } else if (carte.positionAccessible(alt2)) {
-                    plan.add(alt2);
-                    current = alt2;
-                } else {
-                    break;
-                }
-            }
-            etape++;
-        }
-    }
-
-    private boolean positionsProches(Position p1, Position p2) {
-        return p1.distanceTo(p2) < 15;
-    }
-
-    private Position pointOppose(Position danger, int rayon) {
-        int dx = Integer.compare(position.getX(), danger.getX());
-        int dy = Integer.compare(position.getY(), danger.getY());
-        if (dx == 0 && dy == 0) {
-            dx = 1;
-        }
-        Position cible = new Position(position.getX() + dx * rayon, position.getY() + dy * rayon);
-        int x = Math.max(0, Math.min(cible.getX(), carte.getLargeur() - 1));
-        int y = Math.max(0, Math.min(cible.getY(), carte.getHauteur() - 1));
-        Position candidate = new Position(x, y);
-        if (carte.positionAccessible(candidate)) {
-            return candidate;
-        }
-        return null;
-    }
-
-    private boolean gererEvitementActif() {
-        if (cibleEvitement == null) return false;
-        long now = System.currentTimeMillis();
-        if (now > evitementExpireMs) {
-            cibleEvitement = null;
-            return false;
-        }
-        if (position.distanceTo(cibleEvitement) > 12) {
-            deplacerVers(cibleEvitement);
-            return true;
-        }
-        cibleEvitement = null;
-        return false;
-    }
-
-    private void executerPlan() {
-        switch (missionActuelle) {
-            case REPOS:
-                if (zoneActuelle.estQG()) {
-                    reposer();
-                    if (pointsDeVie >= pointsDeVieMax * 0.9) {
-                        missionActuelle = Mission.AUCUNE;
-                    }
-                }
-                break;
-                
-            case CHERCHER_TRESOR:
-                if (tresorCible != null) {
-                    // Coordination: si un animal campe le trésor, organiser un leurre
-                    Animal gardien = trouverGardienTresor(tresorCible);
-                    if (gardien != null && gardien.isActif() && simulation != null) {
-                        double distGardienTresor = gardien.getPosition().distanceTo(tresorCible.getPosition());
-                        Agent decoy = simulation.getLeurre(gardien);
-
-                        if (decoy == null || decoy == this) {
-                            if (simulation.assignerLeurre(gardien, this)) {
-                                if (distGardienTresor > sma.objets.Animal.RANGE_DETECTION * 10) {
-                                    deplacerVers(gardien.getPosition());
-                                    return;
-                                }
-                                Position fuite = pointLeurre(zoneActuelle, tresorCible.getPosition());
-                                if (fuite != null) {
-                                    deplacerVers(fuite);
-                                    return;
-                                }
-                            }
-                        } else {
-                            // Un autre agent sert de leurre: attendre que le gardien s'éloigne
-                            if (distGardienTresor > AgentReactif.VISION_PIXELS * 1.5) {
-                                if (position.distanceTo(tresorCible.getPosition()) < 20) {
-                                    if (collecterTresor(tresorCible)) {
-                                        simulation.libererLeurre(gardien);
-                                        tresorCible = null;
-                                        missionActuelle = Mission.AUCUNE;
-                                    }
-                                    return;
-                                }
-                                avancerDansPlan();
-                                return;
-                            }
-                            // Gardien trop proche: s'écarter
-                            fuirDe(gardien.getPosition());
-                            return;
+                switch (msg.getType()) {
+                    case TRESOR_TROUVE:
+                        if (msg.getPosition() != null && !tresorsConnus.contains(msg.getPosition())) {
+                            tresorsConnus.add(msg.getPosition());
+                            System.out.println("Cognitif " + id + ": Trésor reçu à " + msg.getPosition());
                         }
-                    }
+                        break;
+                        
+                    case ANIMAL_DETECTE:
+                        if (msg.getPosition() != null) {
+                            casesAEviter.add(msg.getPosition());
+                        }
+                        break;
+                        
+                    default:
+                        break;
+                }
+            }
+        }
+    }
 
-                    if (position.distanceTo(tresorCible.getPosition()) < 20) {
-                        if (collecterTresor(tresorCible)) {
-                            tresorCible = null;
-                            missionActuelle = Mission.AUCUNE;
+    private void nettoyerTresorsCollectes() {
+        tresorsConnus.removeIf(c -> 
+            c == null || c.getObjet() == null || 
+            !(c.getObjet() instanceof Tresor) || 
+            ((Tresor) c.getObjet()).isCollecte()
+        );
+        
+        // Annuler destination si trésor collecté
+        if (destination != null) {
+            if (destination.getObjet() == null || 
+                !(destination.getObjet() instanceof Tresor) ||
+                ((Tresor) destination.getObjet()).isCollecte()) {
+                destination = null;
+            }
+        }
+    }
+
+    private void deciderAction() {
+        //priorité secourir réactif proche
+        Case reactifBlesse = trouverReactifBlesseProche();
+        if (reactifBlesse != null) {
+            int distReactif = calculerDistance(caseActuelle, reactifBlesse);
+            int distTresor = destination != null ? calculerDistance(caseActuelle, destination) : Integer.MAX_VALUE;
+            if (distReactif < distTresor) {
+                destination = reactifBlesse;
+                System.out.println("Cognitif " + id + ": Secours réactif à " + reactifBlesse);
+            }
+        }
+        
+        // PRIORITÉ 2: Aller vers un trésor connu
+        if (destination == null && !tresorsConnus.isEmpty()) {
+            destination = trouverTresorLePlusProche();
+            if (destination != null) {
+                System.out.println("Cognitif " + id + ": Cap vers trésor à " + destination);
+            }
+        }
+        
+        // PRIORITÉ 3: Explorer
+        if (destination != null) {
+            allerVersDestination();
+        } else {
+            explorerAleatoirement();
+        }
+        
+        // Vérifier si arrivé à destination
+        if (destination != null && caseActuelle == destination) {
+            // Si c'était un réactif à secourir
+            secourirReactifSurCase();
+            destination = null;
+            historiqueRecent.clear();
+        }
+    }
+
+    private Case trouverReactifBlesseProche() {
+        Zone zone = caseActuelle.getZone();
+        Case plusProche = null;
+        int minDist = Integer.MAX_VALUE;
+        
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c == null) continue;
+                
+                // création d'un copie de la liste résout le pb de l'exConcurrentModificationException
+                List<Agent> agentsCopie = new ArrayList<>(c.getAgents());
+                for (Agent agent : agentsCopie) {
+                    if (agent instanceof AgentReactif && !agent.isAlive()) {
+                        int dist = calculerDistance(caseActuelle, c);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            plusProche = c;
                         }
                     } else {
                         avancerDansPlan();
@@ -514,102 +234,60 @@ public class AgentCognitif extends Agent {
         }
     }
 
-    private Tresor trouverTresorConnu() {
-        RessourcesPartagees ressources = (simulation != null) ? simulation.getRessourcesPartagees() : null;
-        Tresor plusProche = null;
-        double distanceMin = Double.MAX_VALUE;
+    private void allerVersDestination() {
+        if (destination == null || caseActuelle == null) return;
         
-        // D'abord vérifier dans la zone actuelle
-        for (Tresor t : zoneActuelle.getTresorsNonCollectes()) {
-            // Vérifier si ce trésor n'est pas déjà réservé par un autre agent
-            boolean reserve = (ressources != null && ressources.tresorReserve(id, t));
-            if (!reserve) {
-                double dist = position.distanceTo(t.getPosition());
-                if (dist < distanceMin) {
-                    distanceMin = dist;
-                    plusProche = t;
-                }
+        List<Case> adjacentes = getCasesAdjacentes();
+        if (adjacentes.isEmpty()) {
+            adjacentes = super.getCasesAdjacentes();
+            if (adjacentes.isEmpty()) return;
+        }
+        
+        // Éviter les cases récemment visitées
+        List<Case> casesNonVisitees = new ArrayList<>();
+        for (Case c : adjacentes) {
+            if (!historiqueRecent.contains(c)) {
+                casesNonVisitees.add(c);
             }
         }
         
-        // Puis dans les zones connues
-        if (plusProche == null) {
-            for (Map.Entry<Zone, List<Tresor>> entry : connaissanceTresors.entrySet()) {
-                for (Tresor t : entry.getValue()) {
-                    if (!t.isCollecte()) {
-                        boolean reserve = (ressources != null && ressources.tresorReserve(id, t));
-                        if (!reserve) {
-                            double dist = position.distanceTo(t.getPosition());
-                            if (dist < distanceMin) {
-                                distanceMin = dist;
-                                plusProche = t;
-                            }
-                        }
-                    }
-                }
+        List<Case> casesAPrioriser = casesNonVisitees.isEmpty() ? adjacentes : casesNonVisitees;
+        
+        // Trouver la meilleure case
+        Case meilleure = null;
+        int minDistance = Integer.MAX_VALUE;
+        
+        for (Case c : casesAPrioriser) {
+            int dist = calculerDistance(c, destination);
+            if (dist < minDistance) {
+                minDistance = dist;
+                meilleure = c;
             }
         }
         
-        // Réserver le trésor choisi
-        if (plusProche != null && ressources != null) {
-            ressources.reserverTresor(id, plusProche);
+        if (meilleure == null && !adjacentes.isEmpty()) {
+            meilleure = adjacentes.get(random.nextInt(adjacentes.size()));
         }
         
-        return plusProche;
+        if (meilleure != null) {
+            historiqueRecent.addLast(caseActuelle);
+            if (historiqueRecent.size() > TAILLE_HISTORIQUE) {
+                historiqueRecent.removeFirst();
+            }
+            deplacerVers(meilleure);
+        }
     }
 
-    private Zone trouverZoneNonExploree() {
-        RessourcesPartagees ressources = (simulation != null) ? simulation.getRessourcesPartagees() : null;
-        List<Zone> zonesDisponibles = new ArrayList<>();
+    private Case trouverTresorLePlusProche() {
+        Case plusProche = null;
+        int minDist = Integer.MAX_VALUE;
         
-        // Collecter les zones adjacentes non explorées ET non réservées par d'autres agents
-        for (Zone z : carte.getZonesAdjacentes(zoneActuelle)) {
-            if (!zonesExplorees.contains(z)) {
-                // Vérifier aussi si l'équipe a déjà exploré cette zone
-                boolean exploreeParEquipe = (ressources != null && ressources.zoneExploreeParEquipe(z));
-                // Vérifier si un autre agent a déjà réservé cette zone
-                boolean reservee = (ressources != null && ressources.zoneReservee(id, z));
-                
-                if (!exploreeParEquipe && !reservee) {
-                    zonesDisponibles.add(z);
-                }
-            }
-        }
-        
-        // Si on a des zones adjacentes disponibles, en choisir une
-        if (!zonesDisponibles.isEmpty()) {
-            // Utiliser l'ID pour diversifier les choix entre agents
-            int index = id % zonesDisponibles.size();
-            Zone choix = zonesDisponibles.get(index);
-            
-            // Réserver cette zone
-            if (ressources != null) {
-                ressources.reserverZone(id, choix);
-                System.out.println("📌 " + nom + " réserve la zone " + choix.getId());
-            }
-            return choix;
-        }
-        
-        // Sinon chercher n'importe quelle zone non explorée et non réservée
-        zonesDisponibles.clear();
-        for (Zone z : carte.getZones()) {
-            if (!zonesExplorees.contains(z) && !z.estQG()) {
-                boolean exploreeParEquipe = (ressources != null && ressources.zoneExploreeParEquipe(z));
-                boolean reservee = (ressources != null && ressources.zoneReservee(id, z));
-                
-                if (!exploreeParEquipe && !reservee) {
-                    zonesDisponibles.add(z);
-                }
-            }
-        }
-        
-        if (!zonesDisponibles.isEmpty()) {
-            int index = id % zonesDisponibles.size();
-            Zone choix = zonesDisponibles.get(index);
-            
-            if (ressources != null) {
-                ressources.reserverZone(id, choix);
-                System.out.println("📌 " + nom + " réserve la zone " + choix.getId());
+        for (Case c : tresorsConnus) {
+            if (c == null) continue;
+            int dist = calculerDistance(caseActuelle, c);
+            if (dist < minDist) {
+                minDist = dist;
+                plusProche = c;
             }
             return choix;
         }
@@ -676,5 +354,33 @@ public class AgentCognitif extends Agent {
         ressources.libererZone(id);
         ressources.libererTresorParAgent(id);
         System.out.println("🔓 " + nom + " libère ses réservations");
+    }
+
+    private void surveillerStagnation(Case caseAvant) {
+        if (destination == null) {
+            stagnation = 0;
+            return;
+        }
+
+        if (caseActuelle == caseAvant) {
+            stagnation++;
+        } else {
+            stagnation = 0;
+        }
+
+        if (stagnation >= 6) { // boucle suspecte -> reset destination
+            destination = null;
+            historiqueRecent.clear();
+            stagnation = 0;
+            libererReservation();
+            cibleCommunicantZoneId = null;
+        }
+    }
+
+    @Override
+    public void resetToQG() {
+        libererReservation();
+        cibleCommunicantZoneId = null;
+        super.resetToQG();
     }
 }
