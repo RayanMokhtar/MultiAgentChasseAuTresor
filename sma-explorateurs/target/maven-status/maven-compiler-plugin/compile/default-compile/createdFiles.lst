@@ -6,7 +6,6 @@ sma\gui\Dashboard.class
 sma\gui\SimuPara.class
 sma\simulation\Simulation.class
 sma\gui\Dashboard$1.class
-sma\agents\AgentCognitif$1.class
 sma\environnement\Case.class
 sma\gui\MainGui.class
 sma\agents\Agent.class

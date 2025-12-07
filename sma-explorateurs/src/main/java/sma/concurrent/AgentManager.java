@@ -11,6 +11,7 @@ public class AgentManager extends Thread {
     private final long delaiEnMiliSecondes;
     private static volatile boolean simulationTerminee = false; //on peut le faire en synchronized 
     //mais notifie aux autres threads que la simulation est bien terminée 
+    private static final int MULTIPLICATEUR_RESPAWN =  100;  // Facteur de pénalité
 
     public AgentManager(Agent agent, Simulation simulation, long delaiEnMiliSecondes) {
         this.agent = agent;
@@ -35,7 +36,7 @@ public class AgentManager extends Thread {
             
             } else {
                 try {
-                    Thread.sleep(delaiEnMiliSecondes * 5); //reset temps réapparition
+                    Thread.sleep(delaiEnMiliSecondes * MULTIPLICATEUR_RESPAWN); //reset temps réapparition en théroei on est sur du 100*100 donc 10 secondes 
                 } catch (InterruptedException e) {
                     System.out.println("erreur exception interrupted +> ");
                     e.printStackTrace();
