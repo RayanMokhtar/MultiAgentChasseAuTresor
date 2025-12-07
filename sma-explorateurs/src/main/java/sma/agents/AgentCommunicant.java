@@ -14,18 +14,21 @@ import sma.objets.Tresor;
 
 public class AgentCommunicant extends Agent {
     
+    //static pour partager entre les objets les zones occupées => considérons le static comme le QG ... , les zones visitées doivent changer à chaque fois
+    private static final Set<Integer> zonesOccupees = new HashSet<>();
+    
     private final Set<Integer> zonesVisitees = new HashSet<>();
-    private final Set<Case> tresorsDejaSignales = new HashSet<>();
-    private final Set<Integer> zonesOccupeesParCommunicants = new HashSet<>();
-    private final Set<Case> animauxDejaSignales = new HashSet<>();// ensemble pour éviter redondance zone visitées ... puis vérifier if zonesVisitees.contains(zone) => 
-    // private int maxTpAutorisees = 2;
+    private int zoneActuelleId = -1;
+    
     public AgentCommunicant(Case positionInitiale, Carte carte) {
         super(TypologieAgent.COMMUNICANT, positionInitiale, carte);
         
         if (positionInitiale != null && positionInitiale.getZone() != null) {
-            zonesVisitees.add(positionInitiale.getZone().getId());
-            zonesOccupeesParCommunicants.add(positionInitiale.getZone().getId());
-
+            zoneActuelleId = positionInitiale.getZone().getId();
+            zonesVisitees.add(zoneActuelleId);
+            synchronized (zonesOccupees) {
+                zonesOccupees.add(zoneActuelleId);
+            }
         }
     }
 
@@ -49,27 +52,24 @@ public class AgentCommunicant extends Agent {
     }   
 
     private void scannerEtInformer(Zone zone) {
-    for (int x = 0; x < Zone.TAILLE; x++) {
-        for (int y = 0; y < Zone.TAILLE; y++) {
-            Case c = zone.getCase(x, y);
-            if (c == null) continue;
-            
-            ObjetPassif objet = c.getObjet();
-            if (objet == null) continue;
-            
-            // Trésor non collecté - envoyer à chaque step (les cognitifs peuvent arriver à tout moment)
-            if (objet instanceof Tresor && !((Tresor) objet).isCollecte()) {
-                envoyerAuxCognitifsDansZone(Message.TypeMessage.TRESOR_TROUVE, c, zone);
-            }
-            // Animal - envoyer à chaque step aussi
-            else if (objet instanceof Animal) {
-                envoyerAuxCognitifsDansZone(Message.TypeMessage.ANIMAL_DETECTE, c, zone);
+        for (int x = 0; x < Zone.TAILLE; x++) {
+            for (int y = 0; y < Zone.TAILLE; y++) {
+                Case c = zone.getCase(x, y);
+                if (c == null) continue;
+                
+                ObjetPassif objet = c.getObjet();
+                if (objet == null) continue;
+                
+                if (objet instanceof Tresor && !((Tresor) objet).isCollecte()) {
+                    envoyerAuxCognitifsDansZone(Message.TypeMessage.TRESOR_TROUVE, c, zone);
+                }
+                else if (objet instanceof Animal) {
+                    envoyerAuxCognitifsDansZone(Message.TypeMessage.ANIMAL_DETECTE, c, zone);
+                }
             }
         }
     }
-}
 
-   
     private void envoyerAuxCognitifsDansZone(Message.TypeMessage type, Case position, Zone zone) {
         Message msg = new Message(this.id, type, position, zone.getId());
         
@@ -81,12 +81,10 @@ public class AgentCommunicant extends Agent {
                 List<Agent> agentsSurCase = caseRecupere.getAgents();
                 if (agentsSurCase == null || agentsSurCase.isEmpty()) continue;
                 
-                //Créer une copie pour éviter cette erreur 
                 List<Agent> agentsCopie = new ArrayList<>(agentsSurCase);
                 for (Agent a : agentsCopie) {
                     if (a instanceof AgentCognitif) {
-                        AgentCognitif cog = (AgentCognitif) a;
-                        cog.recevoirMessage(msg);
+                        ((AgentCognitif) a).recevoirMessage(msg);
                     }
                 }
             }
@@ -109,34 +107,62 @@ public class AgentCommunicant extends Agent {
     }
 
     private void teleporterVersNouvelleZone() {
-        Zone ancienneZone = caseActuelle.getZone();
-        // Chercher une zone non visitée avec des trésors
-        for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
-            for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
-                if (zx == 0 && zy == 0) continue; // Skip QG
-                Zone zone = carte.getZone(zx, zy);
-                if (zone != null && !zonesVisitees.contains(zone.getId()) && compterTresorsRestants(zone) > 0) {
-                    Case caseSafe = trouverCaseSafe(zone);
-                    if (caseSafe != null) {
-                        zonesOccupeesParCommunicants.remove(ancienneZone.getId());
-                        caseActuelle = caseSafe;
-                        zonesVisitees.add(zone.getId());
-                        zonesOccupeesParCommunicants.add(zone.getId());
-                        tresorsDejaSignales.clear();
-                        animauxDejaSignales.clear();
-                        System.out.println("Communicant " + id + ": Téléporté vers Zone " + zone.getId() + " (nouvelle, libre)");
-                        return;
-                        
+        synchronized (zonesOccupees) {
+            // Libérer la zone actuelle
+            if (zoneActuelleId >= 0) {
+                zonesOccupees.remove(zoneActuelleId);
+            }
+            
+            // Chercher une zone non occupée par un autre communicant
+            for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
+                for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
+                    if (zx == 0 && zy == 0) {
+                        continue; 
+                    }
+                    Zone zone = carte.getZone(zx, zy);
+                    if (zone == null) {
+                        continue;
+                        }
+                    int zoneId = zone.getId();
+                    
+                    //vérifier si la zone n'est pas occupée et nombre de trésors restants dans la zone > = 
+                    if (!zonesOccupees.contains(zoneId) && compterTresorsRestants(zone) > 0) {
+                        Case caseSafe = trouverCaseSafe(zone);
+                        if (caseSafe != null) {
+                            caseActuelle = caseSafe;
+                            zoneActuelleId = zoneId;
+                            zonesVisitees.add(zoneId);
+                            zonesOccupees.add(zoneId);
+                            System.out.println("Communicant " + id + ": Téléporté vers Zone " + zoneId + " (libre)");
+                            return;
+                        }
                     }
                 }
             }
+            
+            // Si toutes les zones libres sont vides, chercher une zone avec trésors même occupée
+            for (int zx = 0; zx < Carte.NB_ZONES_COTE; zx++) {
+                for (int zy = 0; zy < Carte.NB_ZONES_COTE; zy++) {
+                    if (zx == 0 && zy == 0) continue;
+                    
+                    Zone zone = carte.getZone(zx, zy);
+                    if (zone == null) continue;
+                    
+                    if (compterTresorsRestants(zone) > 0) {
+                        Case caseSafe = trouverCaseSafe(zone);
+                        if (caseSafe != null) {
+                            caseActuelle = caseSafe;
+                            zoneActuelleId = zone.getId();
+                            zonesOccupees.add(zoneActuelleId);
+                            System.out.println("Communicant " + id + ": Téléporté vers Zone " + zoneActuelleId + " (fallback)");
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            System.out.println("Communicant " + id + ": Aucune zone avec trésors disponible");
         }
-        
-        // Toutes les zones visitées -> reset
-        System.out.println("Communicant " + id + ": Toutes zones visitées, reset");
-        zonesVisitees.clear();
-        tresorsDejaSignales.clear();
-        animauxDejaSignales.clear();
     }
 
     private Case trouverCaseSafe(Zone zone) {
