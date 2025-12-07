@@ -10,13 +10,13 @@ public class SimuPara {
     public static final int CASE_SIZE = 16;
     public static final int ZONE_MARGIN = 0;
     
-    // Simulation
+    //la simulation
     public static final long DELAY_MS = 100;
     public static final int SIMULATION_DURATION = 60000;
     
     //Agents
     public static final int NB_AGENTS_REACTIFS = 5;
-    public static final int NB_AGENTS_COGNITIFS = 4;
+    public static final int NB_AGENTS_COGNITIFS = 2;
     public static final int NB_AGENTS_COMMUNICANTS = 3;  
     
     //Objets

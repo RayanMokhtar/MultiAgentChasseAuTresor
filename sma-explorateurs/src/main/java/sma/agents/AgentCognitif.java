@@ -116,7 +116,7 @@ public class AgentCognitif extends Agent {
             explorerAleatoirement();
         }
         
-        // Arrivé à destination ?
+        //arriver à destination
         if (destination != null && caseActuelle == destination) {
             secourirAgentsSurCase();
             destination = null;
